@@ -177,6 +177,9 @@ Agent SOW 是一个基于 openJiuwen 的知识强化 Agent 原型项目，对应
 
 ## 最近一次公开 Benchmark 验证结果
 
+关于 enhanced 为什么在部分数据集上反而弱于 baseline 的详细消融分析，已记录在
+[`docs/experiments/enhanced_regression_study_2026-08-01.md`](docs/experiments/enhanced_regression_study_2026-08-01.md)。
+
 最近一次公开数据集小规模测试使用 AgentBench DBBench `db_out_new`，并开启 100 条可执行 fixture 过滤。该过滤只保留“官方 gold SQL 在本地从 AgentBench task record 重建的 SQLite fixture 上能够返回 expected label”的记录。
 
 ```bash

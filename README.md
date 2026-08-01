@@ -100,6 +100,10 @@ the SOW deliverable.
 
 ### Latest Verified Results
 
+Detailed regression analysis for why enhanced can underperform baseline is
+recorded in
+[`docs/experiments/enhanced_regression_study_2026-08-01.md`](docs/experiments/enhanced_regression_study_2026-08-01.md).
+
 The latest public benchmark run used AgentBench DBBench `db_out_new` with a
 100-task executable-fixture filter. The filter keeps records whose official
 gold SQL returns the expected label on the local SQLite fixture reconstructed
