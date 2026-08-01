@@ -12,6 +12,7 @@ from tests.test_openjiuwen_core import (
     test_fault_profile_and_recovery_tool,
     test_key_step_f1_score,
     test_openjiuwen_baseline_and_enhanced_tool_sets,
+    test_openjiuwen_full_enhanced_exposes_only_recovery_tools,
     test_openjiuwen_runner_selects_domain_balanced_tasks,
     test_retrieve_skills_returns_skill_plan,
 )
@@ -34,6 +35,7 @@ def main() -> None:
         test_openjiuwen_runner_selects_domain_balanced_tasks,
         test_challenge_dataset_selects_domain_balanced_tasks,
         test_openjiuwen_baseline_and_enhanced_tool_sets,
+        test_openjiuwen_full_enhanced_exposes_only_recovery_tools,
         test_fault_profile_and_recovery_tool,
         test_retrieve_skills_returns_skill_plan,
         test_key_step_f1_score,

@@ -6,7 +6,8 @@
 
 ```text
 openJiuwen ReActAgent
-  -> retrieve_skills / domain tools
+  -> internal SkillPlan compilation
+  -> gated domain/recovery tools
   -> TraceRecorder
   -> FeedbackUpdater
   -> SkillStore / SkillGraph
@@ -19,20 +20,20 @@ openJiuwen ReActAgent
 3. `SkillExtractor` 从成功轨迹提炼可复用步骤，从失败轨迹提炼失败模式和回滚策略。
 4. `SkillStore` 保存技能、版本、置信度和 evidence trace id。
 5. `SkillGraph` 将技能、工具、领域、失败模式组织成轻量图结构。
-6. Enhanced Agent 先调用 `retrieve_skills`，再根据技能步骤和风险提示选择领域工具。
+6. Enhanced Agent 在 ReAct 执行前内部检索 Skill Graph，编译紧凑 SkillPlan，并按任务风险决定只注册领域工具或额外恢复工具。
 7. `FeedbackUpdater` 根据执行成败更新技能置信度。
 
 ## Baseline
 
 Baseline 使用经典 ReAct 设置：openJiuwen `ReActAgent` + DeepSeek API + 当前领域业务工具，不使用技能库、Skill Graph 或知识检索。
 
-Enhanced 使用同一个 ReActAgent 框架和同一批任务，但额外调用知识工具，形成可对比的知识增强实验。
+Enhanced 使用同一个 ReActAgent 框架和同一批任务，但会注入内部 SkillPlan；只有 hard/recovery 任务才额外暴露恢复工具，避免简单任务和 DBBench 上的工具膨胀。
 
 另外提供 `rag` 与 `memory` 两个更强对照组：二者仍走真实 API，但只提供静态参考文档或原始历史轨迹摘要，不提供结构化技能图谱、失败模式匹配和 rollback plan。
 
 ## Hard Benchmark
 
-`datasets/challenge_tasks.jsonl` 提供三类 hard case，任务包含 `fault_profile`、`expected_recovery_steps`、`required_before_report` 和约束信息。工具层会根据 `fault_profile` 返回结构化错误，Enhanced Agent 可通过 `retrieve_skills`、failure pattern 和 recovery tools 完成恢复。
+`datasets/challenge_tasks.jsonl` 提供三类 hard case，任务包含 `fault_profile`、`expected_recovery_steps`、`required_before_report` 和约束信息。工具层会根据 `fault_profile` 返回结构化错误，Enhanced Agent 可通过内部 SkillPlan、failure pattern 和 recovery tools 完成恢复。
 
 ## 评测指标
 

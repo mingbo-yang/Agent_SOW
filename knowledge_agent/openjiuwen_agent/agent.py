@@ -98,6 +98,7 @@ class OpenJiuwenKnowledgeAgent:
     ) -> AgentRunResult:
         context = context or {}
         mode = agent_type or ("enhanced" if enhanced else "baseline")
+        knowledge_mode = _knowledge_mode_for(mode, domain, context)
         graph = SkillGraph.build_from_skills(self.skill_store.list())
         graph.export_json(self.graph_output_path)
         run_context = OpenJiuwenRunContext(
@@ -111,10 +112,18 @@ class OpenJiuwenKnowledgeAgent:
             required_before_report=list(context.get("required_before_report", [])),
             raw_context=context,
             agent_type=mode,
+            knowledge_mode=knowledge_mode,
         )
         run_context.start()
-        agent = self._build_agent(domain=domain, agent_type=mode)
-        tools = build_openjiuwen_tools(run_context, agent_type=mode, graph_output_path=self.graph_output_path)
+        if mode == "enhanced":
+            self._compile_internal_skill_plan(run_context, graph)
+        agent = self._build_agent(domain=domain, agent_type=mode, knowledge_mode=knowledge_mode)
+        tools = build_openjiuwen_tools(
+            run_context,
+            agent_type=mode,
+            graph_output_path=self.graph_output_path,
+            knowledge_mode=knowledge_mode,
+        )
         run_context.trace_recorder.update_metadata(
             agent=agent.card.id,
             model=self.model_name,
@@ -125,6 +134,7 @@ class OpenJiuwenKnowledgeAgent:
                 "api_base": self.api_base,
                 "agent_type": mode,
                 "enhanced": mode == "enhanced",
+                "knowledge_mode": knowledge_mode,
                 "registered_tools": [tool.card.name for tool in tools],
                 "task_id": context.get("task_id"),
                 "fault_profile": context.get("fault_profile"),
@@ -132,7 +142,7 @@ class OpenJiuwenKnowledgeAgent:
         )
         self._register_tools(agent, tools)
 
-        prompt = self._build_task_prompt(task, domain, context, mode)
+        prompt = self._build_task_prompt(task, domain, context, mode, run_context)
         started_at = time.perf_counter()
         conversation_id = f"{agent.card.id}_{run_context.trace_id}"
         raw_output = await self._invoke_agent(agent, prompt, conversation_id=conversation_id)
@@ -194,7 +204,7 @@ class OpenJiuwenKnowledgeAgent:
             latency_ms=latency_ms,
         )
 
-    def _build_agent(self, domain: str, agent_type: str) -> ReActAgent:
+    def _build_agent(self, domain: str, agent_type: str, knowledge_mode: str = "off") -> ReActAgent:
         agent_id = f"zju_knowledge_react_{domain}_{agent_type}"
         agent = ReActAgent(
             card=AgentCard(
@@ -212,7 +222,7 @@ class OpenJiuwenKnowledgeAgent:
                 model_name=self.model_name,
                 verify_ssl=False,
             )
-            .configure_prompt_template([{"role": "system", "content": self._system_prompt(agent_type)}])
+            .configure_prompt_template([{"role": "system", "content": self._system_prompt(agent_type, knowledge_mode)}])
             .configure_max_iterations(self.max_iterations)
             .configure_parallel_tool_calls(False)
             .configure_context_engine(max_context_message_num=None, default_window_round_num=None)
@@ -241,12 +251,13 @@ class OpenJiuwenKnowledgeAgent:
         domain: str,
         context: dict[str, Any],
         agent_type: str,
+        run_context: OpenJiuwenRunContext,
     ) -> str:
         expected = context.get("expected_steps", [])
         expected_recovery = context.get("expected_recovery_steps", [])
         expected_text = ", ".join(expected)
         recovery_text = ", ".join(expected_recovery)
-        skill_instruction = self._mode_instruction(agent_type)
+        skill_instruction = self._mode_instruction(agent_type, run_context)
         prompt_context = _redact_context_for_prompt(context)
         return (
             f"Mode: {agent_type}\n"
@@ -255,24 +266,31 @@ class OpenJiuwenKnowledgeAgent:
             f"Context JSON: {json.dumps(prompt_context, ensure_ascii=False)}\n"
             f"Expected key steps for evaluation: {expected_text}\n"
             f"Expected recovery steps when faults occur: {recovery_text}\n"
+            f"Precomputed SkillPlan JSON: {json.dumps(_compact_skill_plan(run_context), ensure_ascii=False)}\n"
             f"{skill_instruction}\n"
             "Use tools rather than only answering from memory. Call the relevant tools in a complete order. "
             "If a tool observation contains needs_recovery=true, address the recovery before final answer. "
             "Finish with a short JSON-like summary containing success, used_steps, and final_answer."
         )
 
-    def _system_prompt(self, agent_type: str) -> str:
+    def _system_prompt(self, agent_type: str, knowledge_mode: str = "off") -> str:
         base = (
             "You are an enterprise ReAct agent running inside openJiuwen. "
             "You solve tasks by reasoning, selecting tools, observing results, and then producing a final answer. "
             "Use only registered tools. Keep tool arguments small and valid JSON. "
         )
         if agent_type == "enhanced":
+            if knowledge_mode == "full":
+                return (
+                    base
+                    + "A compact Skill Graph plan is already included in the task prompt. "
+                    + "Follow its domain step order. Use recovery tools only after a tool observation has needs_recovery=true "
+                    + "or when the fault profile explicitly requires the matching rollback step."
+                )
             return (
                 base
-                + "For every task, retrieve reusable skills before domain execution. "
-                + "Treat skills as audited prior experience: follow their steps, match failure patterns, "
-                + "and use rollback/recovery tools before continuing after any tool fault."
+                + "A compact Skill Graph plan is already included in the task prompt as an ordering hint. "
+                + "Do not spend tool calls on skill retrieval or audit logging; solve with the domain tools only."
             )
         if agent_type == "rag":
             return base + "Call retrieve_reference_docs first, then solve with domain tools. Do not use skills."
@@ -280,18 +298,36 @@ class OpenJiuwenKnowledgeAgent:
             return base + "Call retrieve_raw_memory first, then solve with domain tools. Do not use structured skills."
         return base + "Solve with domain tools only; do not use skill retrieval or memory tools."
 
-    def _mode_instruction(self, agent_type: str) -> str:
+    def _mode_instruction(self, agent_type: str, run_context: OpenJiuwenRunContext) -> str:
         if agent_type == "enhanced":
+            if run_context.knowledge_mode == "full":
+                return (
+                    "Use the precomputed SkillPlan as the execution guide. "
+                    "If needs_recovery=true appears, match skill_plan.matched_failure_patterns or rollback_steps and call the relevant recovery tool before continuing. "
+                    "Avoid audit-only tool calls; prioritize expected domain steps and required recovery steps."
+                )
+            if run_context.domain == "agentbench_db":
+                return (
+                    "Use the precomputed SkillPlan only as a compact SQL workflow hint. "
+                    "Do not call any skill or recovery tools. Execute in this order: db_schema_reader, sql_query_executor, answer_submitter."
+                )
             return (
-                "First call retrieve_skills with the task/domain/context, then follow skill_plan. "
-                "If needs_recovery=true appears, match skill_plan.failure_patterns and call the relevant recovery tool "
-                "before continuing domain execution."
+                "Use the precomputed SkillPlan only as a compact ordering hint. "
+                "No recovery tools are needed for this task; execute the expected domain steps directly and keep their order."
             )
         if agent_type == "rag":
             return "First call retrieve_reference_docs. Use only static references and domain tools; no skills or rollback plans are available."
         if agent_type == "memory":
             return "First call retrieve_raw_memory. Use raw memories as hints only; no structured Skill Graph plan is available."
         return "Do not call retrieve_skills. Use only domain tools and your own planning."
+
+    def _compile_internal_skill_plan(self, run_context: OpenJiuwenRunContext, graph: SkillGraph) -> None:
+        from knowledge_agent.openjiuwen_agent.planner import compile_skill_plan
+
+        skills = graph.retrieve(run_context.task, run_context.domain, run_context.raw_context, top_k=3)
+        run_context.selected_skill_ids = [skill.skill_id for skill in skills]
+        run_context.skill_plan = compile_skill_plan(skills, run_context.raw_context)
+        run_context.matched_failure_patterns = list(run_context.skill_plan.matched_failure_patterns)
 
     def _bootstrap_skills(self) -> None:
         if self.skill_store.list():
@@ -323,3 +359,39 @@ def _redact_context_for_prompt(value: Any) -> Any:
     if isinstance(value, list):
         return [_redact_context_for_prompt(item) for item in value]
     return value
+
+
+def _knowledge_mode_for(agent_type: str, domain: str, context: dict[str, Any]) -> str:
+    if agent_type != "enhanced":
+        return "off"
+    if _has_fault_profile(context) or context.get("expected_recovery_steps"):
+        return "full"
+    if domain == "agentbench_db":
+        return "lite_sql"
+    return "lite"
+
+
+def _has_fault_profile(context: dict[str, Any]) -> bool:
+    profile = context.get("fault_profile") or {}
+    failures = profile.get("failures") or []
+    return bool(failures or profile.get("error_code"))
+
+
+def _compact_skill_plan(run_context: OpenJiuwenRunContext) -> dict[str, Any]:
+    if run_context.agent_type != "enhanced":
+        return {}
+    plan = run_context.skill_plan
+    return {
+        "knowledge_mode": run_context.knowledge_mode,
+        "selected_skill_ids": list(run_context.selected_skill_ids),
+        "ordered_steps": _limit(plan.ordered_steps, 8),
+        "failure_patterns": _limit(plan.failure_patterns, 6),
+        "rollback_steps": _limit(plan.rollback_steps, 6),
+        "matched_failure_patterns": _limit(plan.matched_failure_patterns, 6),
+        "plan_warnings": _limit(plan.plan_warnings, 4),
+        "blocked_reasons": _limit(plan.blocked_reasons, 4),
+    }
+
+
+def _limit(items: list[str], max_items: int) -> list[str]:
+    return [str(item) for item in items[:max_items]]

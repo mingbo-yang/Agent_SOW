@@ -41,10 +41,40 @@ def test_openjiuwen_baseline_and_enhanced_tool_sets(tmp_path):
 
     assert "retrieve_skills" not in baseline_names
     assert "document_parser" in baseline_names
-    assert "retrieve_skills" in enhanced_names
-    assert "update_skill_feedback" in enhanced_names
-    assert "context_requester" in enhanced_names
-    assert "rollback_executor" in enhanced_names
+    assert "retrieve_skills" not in enhanced_names
+    assert "update_skill_feedback" not in enhanced_names
+    assert enhanced_names == baseline_names
+
+
+def test_openjiuwen_full_enhanced_exposes_only_recovery_tools(tmp_path):
+    context = OpenJiuwenRunContext(
+        task="Review missing evidence.",
+        domain="finance",
+        trace_recorder=TraceRecorder(tmp_path / "traces"),
+        skill_store=SkillStore(tmp_path / "skills.json"),
+        skill_graph=SkillGraph(),
+        expected_steps=["extract_claim", "collect_evidence", "approve_or_reject"],
+        expected_recovery_steps=["recover_context"],
+        raw_context={
+            "fault_profile": {
+                "failures": [
+                    {
+                        "step": "collect_evidence",
+                        "error_code": "POLICY_EVIDENCE_REQUIRED",
+                        "recoverable_by": ["context_requester", "recover_context"],
+                    }
+                ]
+            }
+        },
+        knowledge_mode="full",
+    )
+    context.start()
+    names = {tool.card.name for tool in build_openjiuwen_tools(context, agent_type="enhanced")}
+    assert "retrieve_skills" not in names
+    assert "record_trace_step" not in names
+    assert "update_skill_feedback" not in names
+    assert "context_requester" in names
+    assert "rollback_executor" in names
 
 
 def test_challenge_dataset_selects_domain_balanced_tasks(tmp_path):
@@ -78,6 +108,7 @@ def test_fault_profile_and_recovery_tool(tmp_path):
                 ]
             }
         },
+        knowledge_mode="full",
     )
     context.start()
     tools = {tool.card.name: tool for tool in build_openjiuwen_tools(context, agent_type="enhanced")}

@@ -44,12 +44,14 @@ the SOW deliverable.
   - Baseline and enhanced agents use the same runtime and model.
 
 - Knowledge-enhanced execution:
-  - `retrieve_skills` retrieves relevant skills from the Skill Graph.
-  - Enhanced prompts require skill retrieval before domain execution.
+  - Relevant skills are retrieved internally from the Skill Graph before ReAct execution.
+  - Enhanced mode uses a gating policy: simple tasks and DBBench use compact
+    SkillPlan hints with domain tools only; fault/recovery tasks expose recovery
+    tools.
   - Retrieved skills are compiled into ordered steps, required tools, failure
     patterns, rollback steps, preconditions, and warnings.
-  - `record_trace_step`, `update_skill_feedback`, and `export_skill_graph` are
-    registered in enhanced mode.
+  - Audit-only knowledge tools are not registered by default, avoiding extra
+    ReAct turns and tool-choice noise.
 
 - Trace and feedback loop:
   - Execution traces include task metadata, tool calls, observations, errors,
@@ -119,7 +121,7 @@ bash scripts/run_agentbench_db_eval.sh \
   --max-iterations 4
 ```
 
-Results from the real DeepSeek API run:
+Original 100-task results before the gating fix:
 
 | Agent | official_success_rate | task_success_rate | avg_turns | avg_tool_calls | avg_latency_ms |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -141,6 +143,17 @@ and has higher average turns/tool calls. The knowledge-enhanced path remains
 more suitable for the controlled hard tasks with faults, recovery steps, and
 rollback decisions; DBBench needs DB-specific prompt and iteration-budget
 optimization before claiming improvement on public SQL QA.
+
+After the gating/tool-pruning fix, a 20-task DBBench `db_out_new` validation
+with `max_iterations=4` produced:
+
+| Agent | official_success_rate | task_success_rate | avg_turns | avg_tool_calls | avg_latency_ms |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| baseline | 0.70 | 0.70 | 6.6 | 6.6 | 7922.95 |
+| enhanced | 0.80 | 0.80 | 6.5 | 6.5 | 7228.25 |
+
+The fixed enhanced DBBench path uses `knowledge_mode=lite_sql`, keeps only the
+three SQL tools registered, and injects the SkillPlan as a compact prompt hint.
 
 A smaller DBBench dev smoke was also run on `dev_1` with both baseline and
 enhanced reaching `official_success_rate=1.0`; `dev_0` loads correctly from the

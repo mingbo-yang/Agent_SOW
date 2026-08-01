@@ -186,3 +186,69 @@ DBBench 早期结果曾被 `Max iterations reached` 低估。已修正为优先�
 6. key-step F1 分开统计 domain steps 与 recovery steps，避免把正确恢复行为误算为 key-step 噪声。
 7. 对 DBBench 增加字段别名、聚合模式、SQL repair skill，而不是通用流程 skill。
 
+## 已实施修复
+
+本轮已实现前四项核心修复中的工程可落地部分：
+
+1. 引入 `knowledge_mode` gating：
+   - `lite`：普通三域任务，内部 SkillPlan hint + 领域工具。
+   - `lite_sql`：DBBench，内部 SkillPlan hint + 3 个 SQL 工具。
+   - `full`：带 `fault_profile` 或 `expected_recovery_steps` 的 hard task，内部 SkillPlan hint + 领域工具 + recovery tools。
+2. `retrieve_skills` 从默认 ReAct tool call 改为内部预编译 SkillPlan，不再占用模型迭代预算。
+3. 默认不注册 `record_trace_step`、`update_skill_feedback`、`export_skill_graph` 等审计型工具，减少工具选择噪声。
+4. DBBench enhanced 工具集合从 11 个收缩为 3 个：`db_schema_reader`、`sql_query_executor`、`answer_submitter`。
+
+保留项：
+
+- `RetrieveSkillsTool` 类仍保留，便于兼容旧 Demo 或后续显式调试，但默认主链路不再注册。
+- `FeedbackUpdater` 仍在 Agent 运行结束后内部执行，不需要模型主动调用 `update_skill_feedback`。
+
+## 修复后验证
+
+### Simple tasks, 9 tasks, max_iterations=6
+
+| Agent | success_rate | key_step_f1 | required_order | avg_tool_calls | avg_latency_ms |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| baseline | 1.000 | 1.000 | 1.000 | 6.444 | 15845.556 |
+| enhanced | 1.000 | 1.000 | 1.000 | 5.778 | 15618.444 |
+
+修复前 enhanced 为 `success_rate=0.667`、`avg_tool_calls=9.333`。修复后负优化消失，`retrieve_skills=0`、`record_trace_step=0`，但 enhanced 仍 9/9 选中内部 skill。
+
+### Challenge tasks, 9 tasks, max_iterations=6
+
+| Agent | success_rate | key_step_f1 | recovery_rate | rollback_used | required_order | avg_tool_calls |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| baseline | 0.000 | 0.884 | 0.000 | 0.000 | 0.556 | 7.778 |
+| enhanced | 0.444 | 0.923 | 1.000 | 0.111 | 0.556 | 6.444 |
+
+修复前 enhanced 为 `success_rate=0.333`、`avg_tool_calls=11.000`。修复后恢复能力保留，且工具调用下降；日志中 `retrieve_skills=0`、`record_trace_step=0`，recovery tools 被调用：`context_requester=9`、`alternative_tool_selector=4`、`rollback_executor=1`、`manual_escalation=2`。
+
+### AgentBench DBBench `db_out_new`, 20 tasks, max_iterations=4
+
+| Agent | official_success_rate | task_success_rate | avg_tool_calls | avg_latency_ms |
+| --- | ---: | ---: | ---: | ---: |
+| baseline | 0.700 | 0.700 | 6.600 | 7922.950 |
+| enhanced | 0.800 | 0.800 | 6.500 | 7228.250 |
+
+修复前同类 DBBench 100-task run 中 enhanced 低于 baseline。修复后 20-task 验证中 enhanced 小幅领先。日志确认 `retrieve_skills=0`、`tool_count=11` 为 0，`tool_count=3` 为 156。
+
+## 修复后结论
+
+负优化的主要原因不是 Skill Graph 完全无效，而是知识模块被放在了错误的执行位置：
+
+- 固定 ReAct 工具调用造成迭代预算损耗。
+- 全量工具暴露造成工具选择噪声。
+- 通用 skill 对纯 SQL QA 的信息增益不足。
+
+修复后，Skill Graph 改为内部 planner hint，恢复工具只在 hard task 暴露，负优化已经在 simple 和 DBBench 小样本上消除，同时 challenge 的恢复收益被保留并增强。
+
+## 与当前不足的关系
+
+本次修复解决的是“为什么当前方法变成负优化”这一工程问题，不等于补齐原 SOW 的全部算法缺口：
+
+- 轨迹到技能仍主要是规则归纳，当前修复只是避免低质量/通用 skill 以 ReAct tool call 形式增加开销。
+- Skill Graph 仍是轻量检索图，当前修复通过 gating 降低其误用风险，没有把它升级为完整 SKG。
+- SkillPlan 仍是结构化计划，不是真正 DAG 编译器；当前修复把它作为 compact hint 使用，避免伪 DAG 过度干预执行。
+- FeedbackUpdater 仍是置信度/证据更新，不是完整知识演进流水线；当前修复保留内部反馈更新，但不再让模型主动调用审计型工具。
+
+后续若继续提升，应优先做两件事：一是提升 skill 质量，例如成功/失败轨迹对照、关键决策点识别、独立回放验证；二是做 domain-specific SkillPlan，例如 DBBench 的 schema linking、SQL repair、字段别名和聚合模式，而不是继续增加通用工具。

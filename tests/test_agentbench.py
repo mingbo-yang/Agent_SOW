@@ -40,8 +40,9 @@ def test_agentbench_db_tool_sets(tmp_path):
     enhanced_names = {tool.card.name for tool in build_openjiuwen_tools(context, agent_type="enhanced")}
     assert {"db_schema_reader", "sql_query_executor", "answer_submitter"} <= baseline_names
     assert "retrieve_skills" not in baseline_names
-    assert "retrieve_skills" in enhanced_names
-    assert "alternative_tool_selector" in enhanced_names
+    assert enhanced_names == baseline_names
+    assert "retrieve_skills" not in enhanced_names
+    assert "alternative_tool_selector" not in enhanced_names
 
 
 def test_agentbench_sql_fixture_execution():

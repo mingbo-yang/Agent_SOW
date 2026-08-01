@@ -65,6 +65,7 @@ class OpenJiuwenRunContext:
     required_before_report: list[str] = field(default_factory=list)
     raw_context: dict[str, Any] = field(default_factory=dict)
     agent_type: str = "enhanced"
+    knowledge_mode: str = "off"
     selected_skill_ids: list[str] = field(default_factory=list)
     executed_steps: list[str] = field(default_factory=list)
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
@@ -594,17 +595,15 @@ def build_openjiuwen_tools(
     agent_type: str = "enhanced",
     graph_output_path: str | Path = "outputs/openjiuwen_skill_graph.json",
     enhanced: bool | None = None,
+    knowledge_mode: str | None = None,
 ) -> list[KnowledgeTool]:
     if enhanced is not None:
         agent_type = "enhanced" if enhanced else "baseline"
+    knowledge_mode = knowledge_mode or context.knowledge_mode
     tools: list[KnowledgeTool] = []
-    if agent_type == "enhanced":
+    if agent_type == "enhanced" and knowledge_mode == "full":
         tools.extend(
             [
-                RetrieveSkillsTool(context),
-                RecordTraceStepTool(context),
-                UpdateSkillFeedbackTool(context),
-                ExportSkillGraphTool(context, graph_output_path),
                 RecoveryTool("context_requester", "Recover by requesting or filling missing context.", "recover_context", context),
                 RecoveryTool("alternative_tool_selector", "Recover by selecting an alternative path or tool.", "select_alternative_path", context),
                 RecoveryTool("rollback_executor", "Recover by rolling back unsafe or failed changes.", "execute_rollback", context),

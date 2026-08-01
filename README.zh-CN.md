@@ -45,8 +45,8 @@ Agent SOW 是一个基于 openJiuwen 的知识强化 Agent 原型项目，对应
 
 ### 知识增强执行
 
-- enhanced 模式会注册并调用 `retrieve_skills`。
-- `retrieve_skills` 从 Skill Graph 检索相关技能。
+- enhanced 模式会在 ReAct 执行前从 Skill Graph 内部检索相关技能。
+- 当前采用 gating 策略：普通任务和 DBBench 只注入紧凑 SkillPlan hint，并仅暴露领域工具；带 fault/recovery 的 hard task 才暴露恢复工具。
 - 检索结果会编译成 `skill_plan`，包含：
   - `ordered_steps`
   - `failure_patterns`
@@ -56,12 +56,8 @@ Agent SOW 是一个基于 openJiuwen 的知识强化 Agent 原型项目，对应
   - `known_constraints`
   - `plan_warnings`
   - `blocked_reasons`
-- enhanced prompt 明确要求先检索技能，再执行领域工具。
-- enhanced 工具集中包含：
-  - `retrieve_skills`
-  - `record_trace_step`
-  - `update_skill_feedback`
-  - `export_skill_graph`
+- 默认不再注册审计型知识工具，避免额外 ReAct 回合和工具选择噪声。
+- full enhanced hard task 会按需注册：
   - `context_requester`
   - `alternative_tool_selector`
   - `rollback_executor`
@@ -192,7 +188,7 @@ bash scripts/run_agentbench_db_eval.sh \
   --max-iterations 4
 ```
 
-真实 DeepSeek API 测试结果：
+gating 修复前，100 条真实 DeepSeek API 测试结果：
 
 | Agent | official_success_rate | task_success_rate | avg_turns | avg_tool_calls | avg_latency_ms |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -208,6 +204,15 @@ trace 检查结果：
 - enhanced selected skills 非空任务数：100
 
 结论：openJiuwen + Skill Graph 的知识增强链路已经完整跑通，但在这组纯 SQL DBBench 任务上没有体现正向提升。enhanced 会额外消耗一次 ReAct 技能检索，并带来更高的平均交互轮数和工具调用次数。当前知识增强路径在带故障、恢复步骤、回滚决策的 hard tasks 上更有优势；若要在公开 SQL QA 上取得稳定提升，还需要继续做 DBBench 专用 prompt 和迭代预算优化。
+
+gating/工具裁剪修复后，20 条 DBBench `db_out_new`、`max_iterations=4` 验证结果：
+
+| Agent | official_success_rate | task_success_rate | avg_turns | avg_tool_calls | avg_latency_ms |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| baseline | 0.70 | 0.70 | 6.6 | 6.6 | 7922.95 |
+| enhanced | 0.80 | 0.80 | 6.5 | 6.5 | 7228.25 |
+
+修复后的 DBBench enhanced 使用 `knowledge_mode=lite_sql`，只注册 3 个 SQL 工具，并将 SkillPlan 作为紧凑 prompt hint 注入。
 
 另外，较早的 DBBench dev smoke 在 `dev_1` 上 baseline/enhanced 均达到 `official_success_rate=1.0`。`dev_0` 可以从官方 dev 文件正常加载，但可见 table fixture 中不包含 gold 条件，因此更适合作为工具链 smoke case，而不是效果样本。
 
