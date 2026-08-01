@@ -17,3 +17,5 @@ datasets/*/.cache/
 dist/
 build/
 .DS_Store
+*.pdf
+*.PDF

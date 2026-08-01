@@ -4,6 +4,10 @@
 
 Agent SOW 是一个基于 openJiuwen 的知识强化 Agent 原型项目，对应“知识强化 Agent”SOW 的工程实现。当前主执行链路基于 openJiuwen `ReActAgent`，并支持通过 DeepSeek 兼容 API 进行真实模型调用。
 
+## GitHub 项目简介
+
+基于 openJiuwen ReActAgent 的知识强化 Agent 原型，支持 Skill Graph 检索增强、故障恢复、轨迹反馈和 AgentBench DBBench 公开 benchmark 评测。
+
 项目目标不是做一个完整生产级 Agent 平台，而是在有限时间内实现可运行、可复现、可评测的工程闭环：
 
 ```text
