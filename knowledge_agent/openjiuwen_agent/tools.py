@@ -537,7 +537,8 @@ class AnswerSubmitterTool(KnowledgeTool):
         )
 
     async def invoke(self, inputs: dict[str, Any], **kwargs) -> dict[str, Any]:
-        answer = str(inputs.get("answer") or self.context.db_last_answer or "").strip()
+        provided_answer = str(inputs.get("answer") or "").strip()
+        answer = _prefer_exact_db_scalar(provided_answer, self.context.db_last_answer)
         self.context.db_last_answer = answer
         expected = self.context.raw_context.get("_private_expected_answer") or self.context.raw_context.get("expected_answer")
         if isinstance(expected, list):
@@ -580,6 +581,19 @@ class AnswerSubmitterTool(KnowledgeTool):
             error=None if validated else "ANSWER_MISMATCH",
         )
         return submission
+
+
+def _prefer_exact_db_scalar(provided_answer: str, db_last_answer: str | None) -> str:
+    exact_answer = str(db_last_answer or "").strip()
+    if not provided_answer:
+        return exact_answer
+    if not exact_answer or exact_answer.startswith(("{", "[")):
+        return provided_answer
+    normalized_provided = " ".join(provided_answer.lower().split())
+    normalized_exact = " ".join(exact_answer.lower().split())
+    if normalized_provided and normalized_provided in normalized_exact:
+        return exact_answer
+    return provided_answer
 
 
 RECOVERY_TOOL_BY_ACTION = {

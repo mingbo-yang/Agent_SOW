@@ -25,12 +25,14 @@ class OpenJiuwenEvaluationRunner:
         dataset_path: str | Path = "datasets/tasks.jsonl",
         output_dir: str | Path = "outputs",
         limit: int | None = None,
+        repeat_to_limit: bool = False,
         max_iterations: int = 10,
     ):
         self.dataset_path = Path(dataset_path)
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.limit = limit
+        self.repeat_to_limit = repeat_to_limit
         self.max_iterations = max_iterations
 
     def run(self, agent_type: str) -> dict[str, Any]:
@@ -137,6 +139,8 @@ class OpenJiuwenEvaluationRunner:
                 tasks.append(json.loads(line))
         if self.limit is not None:
             tasks = self._select_domain_balanced(tasks, self.limit)
+            if self.repeat_to_limit and len(tasks) < self.limit:
+                tasks = self._repeat_tasks(tasks, self.limit)
         return tasks
 
     def _select_domain_balanced(self, tasks: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
@@ -159,6 +163,27 @@ class OpenJiuwenEvaluationRunner:
             if len(selected) >= limit:
                 return selected
         return selected
+
+    def _repeat_tasks(self, tasks: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+        if not tasks:
+            return []
+        expanded: list[dict[str, Any]] = []
+        index = 0
+        while len(expanded) < limit:
+            source = tasks[index % len(tasks)]
+            repeat_index = index // len(tasks)
+            item = json.loads(json.dumps(source, ensure_ascii=False))
+            base_id = str(item.get("task_id") or f"task_{index % len(tasks)}")
+            item["task_id"] = f"{base_id}__rep_{repeat_index:03d}"
+            item["repeat_source_task_id"] = base_id
+            item["repeat_index"] = repeat_index
+            context = item.get("context")
+            if isinstance(context, dict):
+                context["repeat_source_task_id"] = base_id
+                context["repeat_index"] = repeat_index
+            expanded.append(item)
+            index += 1
+        return expanded
 
     def _result_to_dict(self, result: AgentRunResult) -> dict[str, Any]:
         return {
@@ -247,6 +272,11 @@ def main() -> None:
     parser.add_argument("--dataset", default="datasets/tasks.jsonl")
     parser.add_argument("--output-dir", default="outputs")
     parser.add_argument("--limit", type=int, default=int(os.getenv("OPENJIUWEN_EVAL_LIMIT", "3")))
+    parser.add_argument(
+        "--repeat-to-limit",
+        action="store_true",
+        help="Repeat deterministic local tasks with unique task ids until --limit is reached.",
+    )
     parser.add_argument("--max-iterations", type=int, default=int(os.getenv("OPENJIUWEN_MAX_ITERATIONS", "10")))
     args = parser.parse_args()
 
@@ -254,6 +284,7 @@ def main() -> None:
         dataset_path=args.dataset,
         output_dir=args.output_dir,
         limit=args.limit,
+        repeat_to_limit=args.repeat_to_limit,
         max_iterations=args.max_iterations,
     )
     if args.agent == "all":

@@ -5,7 +5,12 @@ from knowledge_agent.benchmarks.agentbench_adapter import AgentBenchDBAdapter, e
 from knowledge_agent.evaluation.agentbench_runner import AgentBenchEvaluationRunner
 from knowledge_agent.evaluation.result import AgentRunResult
 from knowledge_agent.graph.skill_graph import SkillGraph
-from knowledge_agent.openjiuwen_agent.tools import OpenJiuwenRunContext, build_openjiuwen_tools
+from knowledge_agent.openjiuwen_agent.agent import OpenJiuwenKnowledgeAgent, _knowledge_mode_for
+from knowledge_agent.openjiuwen_agent.tools import (
+    AnswerSubmitterTool,
+    OpenJiuwenRunContext,
+    build_openjiuwen_tools,
+)
 from knowledge_agent.skills.store import SkillStore
 from knowledge_agent.tracing.recorder import TraceRecorder
 from knowledge_agent.tracing.schema import ExecutionResult, Observation, ToolCall, Trace, TraceStep
@@ -85,6 +90,42 @@ def test_agentbench_db_tools_record_expected_steps(tmp_path):
         "validate_answer",
         "submit_answer",
     ]
+
+
+def test_agentbench_auto_finalize_submits_last_answer(tmp_path):
+    context = OpenJiuwenRunContext(
+        task="Which department has the most employees?",
+        domain="agentbench_db",
+        trace_recorder=TraceRecorder(tmp_path / "traces"),
+        skill_store=SkillStore(tmp_path / "skills.json"),
+        skill_graph=SkillGraph(),
+        raw_context={"_private_expected_answer": "Engineering"},
+    )
+    context.start()
+    context.db_last_answer = "Engineering"
+    agent = object.__new__(OpenJiuwenKnowledgeAgent)
+    asyncio.run(agent._auto_finalize_db_answer(context))
+    assert "validate_answer" in context.executed_steps
+    assert "submit_answer" in context.executed_steps
+
+
+def test_agentbench_submitter_preserves_exact_scalar_result(tmp_path):
+    context = OpenJiuwenRunContext(
+        task="Who was the leading scorer?",
+        domain="agentbench_db",
+        trace_recorder=TraceRecorder(tmp_path / "traces"),
+        skill_store=SkillStore(tmp_path / "skills.json"),
+        skill_graph=SkillGraph(),
+    )
+    context.start()
+    context.db_last_answer = "Mike Dunleavy (27)"
+    result = asyncio.run(AnswerSubmitterTool(context).invoke({"answer": "Mike Dunleavy"}))
+    assert result["content"] == "Mike Dunleavy (27)"
+
+
+def test_agentbench_enhanced_abstains_without_validated_db_skill():
+    assert _knowledge_mode_for("enhanced", "agentbench_db", {}) == "off"
+    assert _knowledge_mode_for("enhanced", "agentbench_db", {"enable_db_skill_plan": True}) == "lite_sql"
 
 
 def test_agentbench_runner_generates_mock_result_json(tmp_path):

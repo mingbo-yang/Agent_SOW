@@ -13,6 +13,7 @@ from knowledge_agent.skills.extractor import SkillExtractor
 from knowledge_agent.skills.store import SkillStore
 from knowledge_agent.tracing.recorder import TraceRecorder, load_traces_jsonl
 from knowledge_agent.openjiuwen_agent.tools import (
+    AnswerSubmitterTool,
     OpenJiuwenRunContext,
     build_openjiuwen_tools,
     evaluate_openjiuwen_run,
@@ -115,7 +116,7 @@ class OpenJiuwenKnowledgeAgent:
             knowledge_mode=knowledge_mode,
         )
         run_context.start()
-        if mode == "enhanced":
+        if mode == "enhanced" and knowledge_mode != "off":
             self._compile_internal_skill_plan(run_context, graph)
         agent = self._build_agent(domain=domain, agent_type=mode, knowledge_mode=knowledge_mode)
         tools = build_openjiuwen_tools(
@@ -135,6 +136,12 @@ class OpenJiuwenKnowledgeAgent:
                 "agent_type": mode,
                 "enhanced": mode == "enhanced",
                 "knowledge_mode": knowledge_mode,
+                "knowledge_abstained": mode == "enhanced" and knowledge_mode == "off",
+                "knowledge_abstain_reason": (
+                    "no_replay_validated_db_skill"
+                    if mode == "enhanced" and domain == "agentbench_db" and knowledge_mode == "off"
+                    else None
+                ),
                 "registered_tools": [tool.card.name for tool in tools],
                 "task_id": context.get("task_id"),
                 "fault_profile": context.get("fault_profile"),
@@ -142,10 +149,13 @@ class OpenJiuwenKnowledgeAgent:
         )
         self._register_tools(agent, tools)
 
-        prompt = self._build_task_prompt(task, domain, context, mode, run_context)
+        prompt_mode = "baseline" if mode == "enhanced" and knowledge_mode == "off" else mode
+        prompt = self._build_task_prompt(task, domain, context, prompt_mode, run_context)
         started_at = time.perf_counter()
         conversation_id = f"{agent.card.id}_{run_context.trace_id}"
         raw_output = await self._invoke_agent(agent, prompt, conversation_id=conversation_id)
+        if domain == "agentbench_db":
+            await self._auto_finalize_db_answer(run_context)
         if mode == "enhanced" and run_context.unresolved_faults():
             run_context.apply_structured_recovery()
         latency_ms = int((time.perf_counter() - started_at) * 1000)
@@ -280,6 +290,8 @@ class OpenJiuwenKnowledgeAgent:
             "Use only registered tools. Keep tool arguments small and valid JSON. "
         )
         if agent_type == "enhanced":
+            if knowledge_mode == "off":
+                return base + "Solve with domain tools only; do not use skill retrieval or memory tools."
             if knowledge_mode == "full":
                 return (
                     base
@@ -309,7 +321,10 @@ class OpenJiuwenKnowledgeAgent:
             if run_context.domain == "agentbench_db":
                 return (
                     "Use the precomputed SkillPlan only as a compact SQL workflow hint. "
-                    "Do not call any skill or recovery tools. Execute in this order: db_schema_reader, sql_query_executor, answer_submitter."
+                    "Do not call any skill or recovery tools. Execute in this order: db_schema_reader, sql_query_executor, answer_submitter. "
+                    "Before submitting, verify that the SQL projection, filters, aggregation, ordering, and limit match the question. "
+                    "Revise and execute the SQL once more when the returned columns or row shape do not directly answer it; "
+                    "otherwise extract the answer and call answer_submitter."
                 )
             return (
                 "Use the precomputed SkillPlan only as a compact ordering hint. "
@@ -328,6 +343,15 @@ class OpenJiuwenKnowledgeAgent:
         run_context.selected_skill_ids = [skill.skill_id for skill in skills]
         run_context.skill_plan = compile_skill_plan(skills, run_context.raw_context)
         run_context.matched_failure_patterns = list(run_context.skill_plan.matched_failure_patterns)
+
+    async def _auto_finalize_db_answer(self, run_context: OpenJiuwenRunContext) -> None:
+        if "submit_answer" in run_context.executed_steps:
+            return
+        if not run_context.db_last_answer:
+            return
+        await AnswerSubmitterTool(run_context).invoke(
+            {"answer": run_context.db_last_answer, "source": "auto_finalize_db_answer"}
+        )
 
     def _bootstrap_skills(self) -> None:
         if self.skill_store.list():
@@ -367,7 +391,7 @@ def _knowledge_mode_for(agent_type: str, domain: str, context: dict[str, Any]) -
     if _has_fault_profile(context) or context.get("expected_recovery_steps"):
         return "full"
     if domain == "agentbench_db":
-        return "lite_sql"
+        return "lite_sql" if context.get("enable_db_skill_plan") else "off"
     return "lite"
 
 
@@ -378,7 +402,7 @@ def _has_fault_profile(context: dict[str, Any]) -> bool:
 
 
 def _compact_skill_plan(run_context: OpenJiuwenRunContext) -> dict[str, Any]:
-    if run_context.agent_type != "enhanced":
+    if run_context.agent_type != "enhanced" or run_context.knowledge_mode == "off":
         return {}
     plan = run_context.skill_plan
     return {

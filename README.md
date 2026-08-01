@@ -45,9 +45,9 @@ the SOW deliverable.
 
 - Knowledge-enhanced execution:
   - Relevant skills are retrieved internally from the Skill Graph before ReAct execution.
-  - Enhanced mode uses a gating policy: simple tasks and DBBench use compact
-    SkillPlan hints with domain tools only; fault/recovery tasks expose recovery
-    tools.
+  - Enhanced mode uses a gating policy: simple tasks use compact SkillPlan
+    hints, fault/recovery tasks expose recovery tools, and DBBench abstains when
+    no replay-validated DB skill is available.
   - Retrieved skills are compiled into ordered steps, required tools, failure
     patterns, rollback steps, preconditions, and warnings.
   - Audit-only knowledge tools are not registered by default, avoiding extra
@@ -102,63 +102,20 @@ the SOW deliverable.
 
 ### Latest Verified Results
 
-Detailed regression analysis for why enhanced can underperform baseline is
-recorded in
-[`docs/experiments/enhanced_regression_study_2026-08-01.md`](docs/experiments/enhanced_regression_study_2026-08-01.md).
+The full 100-run study, commands, caveats, and regression analysis are in
+[`docs/experiments/scaled_benchmark_100_2026-08-01.md`](docs/experiments/scaled_benchmark_100_2026-08-01.md).
 
-The latest public benchmark run used AgentBench DBBench `db_out_new` with a
-100-task executable-fixture filter. The filter keeps records whose official
-gold SQL returns the expected label on the local SQLite fixture reconstructed
-from the AgentBench task record.
+| Evaluation | Baseline | Enhanced | Main result |
+| --- | ---: | ---: | --- |
+| Simple workflow, 100 repeated runs | 1.000 | 1.000 | Same accuracy; enhanced uses 0.55 fewer tool calls |
+| Challenge recovery, 100 repeated runs | 0.000 | 0.680 | Enhanced recovery rate is 1.000 |
+| AgentBench DBBench, 100 distinct tasks | 0.920 | 0.890 | No significant difference, exact McNemar `p=0.581` |
 
-```bash
-DEEPSEEK_MODEL=deepseek-v4-flash
-bash scripts/run_agentbench_db_eval.sh \
-  --agent both \
-  --split db_out_new \
-  --limit 100 \
-  --require-executable-fixture \
-  --max-iterations 4
-```
-
-Original 100-task results before the gating fix:
-
-| Agent | official_success_rate | task_success_rate | avg_turns | avg_tool_calls | avg_latency_ms |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| baseline | 0.79 | 0.81 | 6.9 | 6.9 | 6836.57 |
-| enhanced | 0.72 | 0.75 | 9.0 | 9.0 | 10679.08 |
-
-Trace checks:
-
-- model: `deepseek-v4-flash`
-- baseline tasks: 100
-- enhanced tasks: 100
-- enhanced `retrieve_skills` calls: 100
-- enhanced tasks with selected skills: 100
-
-Interpretation: the openJiuwen + Skill Graph path is fully exercised, but this
-pure SQL DBBench subset does not show a positive lift from knowledge
-augmentation. The enhanced agent spends an extra ReAct step on skill retrieval
-and has higher average turns/tool calls. The knowledge-enhanced path remains
-more suitable for the controlled hard tasks with faults, recovery steps, and
-rollback decisions; DBBench needs DB-specific prompt and iteration-budget
-optimization before claiming improvement on public SQL QA.
-
-After the gating/tool-pruning fix, a 20-task DBBench `db_out_new` validation
-with `max_iterations=4` produced:
-
-| Agent | official_success_rate | task_success_rate | avg_turns | avg_tool_calls | avg_latency_ms |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| baseline | 0.70 | 0.70 | 6.6 | 6.6 | 7922.95 |
-| enhanced | 0.80 | 0.80 | 6.5 | 6.5 | 7228.25 |
-
-The fixed enhanced DBBench path uses `knowledge_mode=lite_sql`, keeps only the
-three SQL tools registered, and injects the SkillPlan as a compact prompt hint.
-
-A smaller DBBench dev smoke was also run on `dev_1` with both baseline and
-enhanced reaching `official_success_rate=1.0`; `dev_0` loads correctly from the
-official dev file but its visible table fixture does not contain the gold
-condition, so it is useful only as a tool-chain smoke case.
+The DBBench result is not claimed as an improvement. Generic SQL workflow
+skills did not add enough information and previously caused extra tool calls
+and premature answers. The final quality gate therefore abstains from DB skill
+injection until a DB-specific skill has passed independent replay validation.
+The enhanced trace records this decision explicitly.
 
 ## Not Yet Completed
 

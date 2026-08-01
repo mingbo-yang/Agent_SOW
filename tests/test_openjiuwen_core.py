@@ -24,6 +24,21 @@ def test_openjiuwen_runner_selects_domain_balanced_tasks(tmp_path):
     assert [task["domain"] for task in tasks] == ["ai4science", "finance", "industrial"]
 
 
+def test_openjiuwen_runner_repeats_to_limit_with_unique_ids(tmp_path):
+    runner = OpenJiuwenEvaluationRunner(
+        dataset_path="datasets/challenge_tasks.jsonl",
+        output_dir=tmp_path,
+        limit=100,
+        repeat_to_limit=True,
+    )
+    tasks = runner._load_tasks()
+    task_ids = [task["task_id"] for task in tasks]
+    assert len(tasks) == 100
+    assert len(set(task_ids)) == 100
+    assert tasks[0]["repeat_index"] == 0
+    assert tasks[-1]["repeat_index"] > 0
+
+
 def test_openjiuwen_baseline_and_enhanced_tool_sets(tmp_path):
     context = OpenJiuwenRunContext(
         task="Review reimbursement with duplicate receipts.",
