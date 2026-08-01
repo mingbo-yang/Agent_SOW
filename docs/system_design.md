@@ -10,10 +10,14 @@
 TraceRecorder -> SkillExtractor -> SkillStore -> SkillGraph -> KnowledgeEnhancedAgent -> FeedbackUpdater
 ```
 
-openJiuwen 接入路径：
+openJiuwen 主链路：
 
 ```text
-openJiuwen ReAct/Workflow run events -> OpenJiuwenRuntimeAdapter -> Trace -> SkillExtractor -> SkillGraph
+openJiuwen ReActAgent
+  -> retrieve_skills / domain tools
+  -> TraceRecorder
+  -> FeedbackUpdater
+  -> SkillStore / SkillGraph
 ```
 
 ## 数据闭环

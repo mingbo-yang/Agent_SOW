@@ -67,6 +67,21 @@ class TraceRecorder:
             )
         )
 
+    def update_metadata(
+        self,
+        agent: str | None = None,
+        model: str | None = None,
+        audit: dict[str, Any] | None = None,
+    ) -> None:
+        if self._current is None:
+            raise RuntimeError("TraceRecorder.start() must be called before update_metadata().")
+        if agent is not None:
+            self._current.metadata.agent = agent
+        if model is not None:
+            self._current.metadata.model = model
+        if audit:
+            self._current.metadata.audit.update(audit)
+
     def finish(
         self,
         success: bool,
@@ -113,4 +128,3 @@ def load_traces_jsonl(path: str | Path) -> list[Trace]:
         if line.strip():
             traces.append(Trace.from_dict(json.loads(line)))
     return traces
-

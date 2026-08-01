@@ -17,23 +17,11 @@ def main() -> int:
     client = OpenAI(api_key=api_key, base_url=api_base)
     response = client.chat.completions.create(
         model=model,
-        messages=[
-            {
-                "role": "system",
-                "content": "You are a concise test assistant. Return JSON only.",
-            },
-            {
-                "role": "user",
-                "content": (
-                    "Return a JSON object with keys status, model, and message. "
-                    "Use status='ok' and message='deepseek api reachable'."
-                ),
-            },
-        ],
+        messages=[{"role": "user", "content": "Say OK exactly."}],
         temperature=0,
-        max_tokens=80,
+        max_tokens=64,
     )
-    message = response.choices[0].message.content
+    message = response.choices[0].message.content or ""
     print(
         {
             "api_base": api_base,
@@ -42,9 +30,8 @@ def main() -> int:
             "message": message,
         }
     )
-    return 0
+    return 0 if message.strip() else 1
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

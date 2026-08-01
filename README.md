@@ -15,6 +15,8 @@ python3 tests/run_tests.py
 bash scripts/check_openjiuwen.sh
 DEEPSEEK_API_KEY=... .venv/bin/python scripts/test_deepseek_api.py
 DEEPSEEK_API_KEY=... bash scripts/test_openjiuwen_deepseek.sh
+DEEPSEEK_API_KEY=... bash scripts/run_openjiuwen_demo.sh
+DEEPSEEK_API_KEY=... bash scripts/run_openjiuwen_eval.sh
 ```
 
 评测输出位于 `outputs/`：
@@ -35,6 +37,7 @@ DEEPSEEK_API_KEY=... bash scripts/test_openjiuwen_deepseek.sh
 - `knowledge_agent/planner`：Baseline Agent、Knowledge Enhanced Agent、执行检查器。
 - `knowledge_agent/feedback`：基于执行结果的技能置信度更新。
 - `knowledge_agent/evaluation`：任务成功率、关键步骤 F1、交互轮数、工具调用次数等评测。
+- `knowledge_agent/openjiuwen_agent`：基于 openJiuwen ReActAgent 的真实主执行链路和工具注册。
 - `datasets`：三类模拟场景任务和 seed traces。
 - `demos`：AI4Science、金融、工业/运维演示。
 
