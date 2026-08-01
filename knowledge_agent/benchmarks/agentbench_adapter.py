@@ -66,6 +66,20 @@ class AgentBenchDBAdapter:
             tasks = tasks[:limit]
         return [task.to_project_task() for task in tasks]
 
+    def load_executable_tasks(self, limit: int | None = None, offset: int = 0) -> list[dict[str, Any]]:
+        tasks = [
+            task
+            for task in self._load_official_like_tasks()
+            if _gold_sql_matches_fixture(task.context)
+        ]
+        if not tasks:
+            tasks = self._fallback_tasks()
+        if offset:
+            tasks = tasks[offset:]
+        if limit is not None:
+            tasks = tasks[:limit]
+        return [task.to_project_task() for task in tasks]
+
     def to_agentbench_answer(self, result: Any) -> str:
         if hasattr(result, "trace") and result.trace and result.trace.result:
             return str(result.trace.result.result)
@@ -134,6 +148,7 @@ class AgentBenchDBAdapter:
         expected_answer = _first_present(raw, ["answer", "expected_answer", "gold", "label"])
         db_path = _first_present(raw, ["db_path", "database_path", "sqlite_path"])
         context = {
+            "_private_official_record": raw,
             "official_record": _public_record(raw),
             "schema": schema,
             "db_path": db_path,
@@ -295,6 +310,18 @@ def _fixture_from_record(raw: dict[str, Any]) -> dict[str, Any]:
         "schema": raw.get("add_description") or "",
         "tables": {table_name: converted_rows},
     }
+
+
+def _gold_sql_matches_fixture(context: dict[str, Any]) -> bool:
+    raw = context.get("_private_official_record") or {}
+    sql = (raw.get("sql") or {}).get("query")
+    expected = context.get("_private_expected_answer")
+    fixture = context.get("dbbench_fixture") or {}
+    if not sql or not expected or not fixture.get("tables"):
+        return False
+    expected_values = expected if isinstance(expected, list) else [expected]
+    ok, content, _rows = execute_sql_fixture(fixture, sql)
+    return ok and any(str(value) in content for value in expected_values)
 
 
 def _public_record(raw: dict[str, Any]) -> dict[str, Any]:

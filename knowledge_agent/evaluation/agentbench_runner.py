@@ -28,6 +28,7 @@ class AgentBenchEvaluationRunner:
         agentbench_root: str | Path = "external/AgentBench",
         limit: int = 3,
         offset: int = 0,
+        require_executable_fixture: bool = False,
         max_iterations: int = 10,
     ):
         if benchmark != "dbbench":
@@ -40,13 +41,17 @@ class AgentBenchEvaluationRunner:
         self.adapter = AgentBenchDBAdapter(agentbench_root=agentbench_root, split=split)
         self.limit = limit
         self.offset = offset
+        self.require_executable_fixture = require_executable_fixture
         self.max_iterations = max_iterations
 
     def run(self, agent: str) -> dict[str, Any]:
         if agent not in self.AGENT_TYPES:
             raise ValueError(f"agent must be one of {sorted(self.AGENT_TYPES)}")
         mode = self.AGENT_TYPES[agent]
-        tasks = self.adapter.load_tasks(limit=self.limit, offset=self.offset)
+        if self.require_executable_fixture:
+            tasks = self.adapter.load_executable_tasks(limit=self.limit, offset=self.offset)
+        else:
+            tasks = self.adapter.load_tasks(limit=self.limit, offset=self.offset)
         openjiuwen_agent = OpenJiuwenKnowledgeAgent.from_env(
             skill_store_path=self.output_dir / f"agentbench_runtime_skills_{mode}.json",
             trace_dir=self.output_dir / "traces",
@@ -119,17 +124,19 @@ class AgentBenchEvaluationRunner:
 
     def _run_one(self, agent: OpenJiuwenKnowledgeAgent, task: dict[str, Any], mode: str) -> dict[str, Any]:
         result = agent.run(task["task"], task["domain"], task, agent_type=mode)
-        final_answer = self.adapter.to_agentbench_answer(result)
+        raw_final_answer = self.adapter.to_agentbench_answer(result)
+        final_answer = self._submitted_answer_from_trace(result) or raw_final_answer
         score = self.adapter.official_score(task, final_answer)
         official_success = score["official_success"]
         success = result.success and (bool(official_success) if official_success is not None else True)
-        return self._result_to_dict(result, task, final_answer, score, success)
+        return self._result_to_dict(result, task, final_answer, raw_final_answer, score, success)
 
     def _result_to_dict(
         self,
         result: AgentRunResult,
         task: dict[str, Any],
         final_answer: str,
+        raw_final_answer: str,
         official_score: dict[str, Any],
         success: bool,
     ) -> dict[str, Any]:
@@ -151,6 +158,7 @@ class AgentBenchEvaluationRunner:
             "official_available": official_score["official_available"],
             "scorer": official_score["scorer"],
             "final_answer": final_answer,
+            "raw_final_answer": raw_final_answer,
             "failure_reason": result.failure_reason,
             "trace_path": trace_path,
             "selected_skills": result.selected_skills,
@@ -164,6 +172,23 @@ class AgentBenchEvaluationRunner:
             "model": os.getenv("DEEPSEEK_MODEL") or "deepseek-v4-flash",
             "benchmark_metadata": metadata,
         }
+
+    def _submitted_answer_from_trace(self, result: AgentRunResult) -> str | None:
+        if not result.trace:
+            return None
+        for step in reversed(result.trace.steps):
+            if step.action != "submit_answer":
+                continue
+            if not step.observation or not step.observation.content:
+                continue
+            try:
+                observation = json.loads(step.observation.content)
+            except json.JSONDecodeError:
+                continue
+            content = observation.get("content")
+            if content is not None and str(content).strip():
+                return str(content).strip()
+        return None
 
     def _metrics(self, results: list[dict[str, Any]]) -> dict[str, Any]:
         if not results:
@@ -227,6 +252,11 @@ def main() -> None:
     parser.add_argument("--split", default="dev")
     parser.add_argument("--limit", type=int, default=int(os.getenv("AGENTBENCH_LIMIT", "3")))
     parser.add_argument("--offset", type=int, default=int(os.getenv("AGENTBENCH_OFFSET", "0")))
+    parser.add_argument(
+        "--require-executable-fixture",
+        action="store_true",
+        help="Use only DBBench records whose gold SQL returns the label on the local fixture.",
+    )
     parser.add_argument("--agent", choices=["baseline", "rag", "memory", "enhanced", "both", "all"], default="both")
     parser.add_argument("--output-dir", default="outputs/agentbench")
     parser.add_argument("--agentbench-root", default="external/AgentBench")
@@ -240,6 +270,7 @@ def main() -> None:
         agentbench_root=args.agentbench_root,
         limit=args.limit,
         offset=args.offset,
+        require_executable_fixture=args.require_executable_fixture,
         max_iterations=args.max_iterations,
     )
     if args.agent == "both":

@@ -537,6 +537,7 @@ class AnswerSubmitterTool(KnowledgeTool):
 
     async def invoke(self, inputs: dict[str, Any], **kwargs) -> dict[str, Any]:
         answer = str(inputs.get("answer") or self.context.db_last_answer or "").strip()
+        self.context.db_last_answer = answer
         expected = self.context.raw_context.get("_private_expected_answer") or self.context.raw_context.get("expected_answer")
         if isinstance(expected, list):
             expected_values = [str(item).strip().lower() for item in expected]

@@ -1,5 +1,7 @@
 # Agent SOW
 
+[中文 README](README.zh-CN.md) | English
+
 Agent SOW is an openJiuwen-based knowledge-enhanced Agent prototype for the
 Knowledge Reinforcement Agent SOW. The main runtime path is built on
 openJiuwen `ReActAgent` and real DeepSeek-compatible API calls.
@@ -21,7 +23,7 @@ Task -> openJiuwen ReActAgent -> tools -> trace -> skill extraction
   trace recording, and skill confidence updates.
 - AI4Science, finance, and industrial/operations tasks are available as
   deterministic local scenarios.
-- AgentBench DBBench dev subset is integrated as the first public benchmark.
+- AgentBench DBBench is integrated as the first public benchmark path.
 - Runs generate JSON results, Markdown reports, skill graphs, and execution
   traces.
 - API keys, outputs, logs, virtual environments, and external AgentBench source
@@ -82,7 +84,8 @@ the SOW deliverable.
 
 - Public benchmark integration:
   - AgentBench is cloned externally into `external/AgentBench`.
-  - DBBench dev subset is loaded from `external/AgentBench/data/dbbench/dev.jsonl`.
+  - DBBench data is loaded from `external/AgentBench/data/dbbench/`, including
+    `dev.jsonl` and larger public files such as `db_out_new.jsonl`.
   - DBBench tasks are adapted into the project task format.
   - DB tools include schema reading, SQL execution, and answer submission.
   - Baseline and enhanced DBBench evaluation outputs are written to
@@ -97,31 +100,48 @@ the SOW deliverable.
 
 ### Latest Verified Results
 
-The latest public benchmark smoke used:
+The latest public benchmark run used AgentBench DBBench `db_out_new` with a
+100-task executable-fixture filter. The filter keeps records whose official
+gold SQL returns the expected label on the local SQLite fixture reconstructed
+from the AgentBench task record.
 
 ```bash
 DEEPSEEK_MODEL=deepseek-v4-flash
-bash scripts/run_agentbench_db_eval.sh --agent both --offset 1 --limit 1 --max-iterations 6
+bash scripts/run_agentbench_db_eval.sh \
+  --agent both \
+  --split db_out_new \
+  --limit 100 \
+  --require-executable-fixture \
+  --max-iterations 4
 ```
 
-Result summary for AgentBench DBBench `dev_1`:
+Results from the real DeepSeek API run:
 
-| Agent | official_success_rate | task_success_rate | avg_turns | avg_tool_calls |
-| --- | ---: | ---: | ---: | ---: |
-| baseline | 1.0 | 1.0 | 7 | 7 |
-| enhanced | 1.0 | 1.0 | 7 | 7 |
+| Agent | official_success_rate | task_success_rate | avg_turns | avg_tool_calls | avg_latency_ms |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| baseline | 0.79 | 0.81 | 6.9 | 6.9 | 6836.57 |
+| enhanced | 0.72 | 0.75 | 9.0 | 9.0 | 10679.08 |
 
-Enhanced trace confirmed:
+Trace checks:
 
 - model: `deepseek-v4-flash`
-- `retrieve_skills` registered: yes
-- `retrieve_skills` called: yes
-- selected skill: `skill_fa3b80230214`
+- baseline tasks: 100
+- enhanced tasks: 100
+- enhanced `retrieve_skills` calls: 100
+- enhanced tasks with selected skills: 100
 
-AgentBench DBBench `dev_0` was also tested. The task loaded from the official
-dev file, but the visible table fixture did not contain the gold condition, so
-both baseline and enhanced failed while still exercising the openJiuwen +
-DBBench tool chain.
+Interpretation: the openJiuwen + Skill Graph path is fully exercised, but this
+pure SQL DBBench subset does not show a positive lift from knowledge
+augmentation. The enhanced agent spends an extra ReAct step on skill retrieval
+and has higher average turns/tool calls. The knowledge-enhanced path remains
+more suitable for the controlled hard tasks with faults, recovery steps, and
+rollback decisions; DBBench needs DB-specific prompt and iteration-budget
+optimization before claiming improvement on public SQL QA.
+
+A smaller DBBench dev smoke was also run on `dev_1` with both baseline and
+enhanced reaching `official_success_rate=1.0`; `dev_0` loads correctly from the
+official dev file but its visible table fixture does not contain the gold
+condition, so it is useful only as a tool-chain smoke case.
 
 ## Not Yet Completed
 

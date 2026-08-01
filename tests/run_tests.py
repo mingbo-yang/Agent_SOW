@@ -20,6 +20,7 @@ from tests.test_agentbench import (
     test_agentbench_db_tool_sets,
     test_agentbench_db_tools_record_expected_steps,
     test_agentbench_runner_generates_mock_result_json,
+    test_agentbench_runner_prefers_submitted_answer,
     test_agentbench_sql_fixture_execution,
 )
 from tests.test_skills_graph import test_skill_extraction_store_and_graph
@@ -41,6 +42,7 @@ def main() -> None:
         test_agentbench_sql_fixture_execution,
         test_agentbench_db_tools_record_expected_steps,
         test_agentbench_runner_generates_mock_result_json,
+        test_agentbench_runner_prefers_submitted_answer,
     ]
     for test in tests:
         with tempfile.TemporaryDirectory() as tmp:

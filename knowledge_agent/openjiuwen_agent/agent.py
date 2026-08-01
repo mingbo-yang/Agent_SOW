@@ -134,7 +134,8 @@ class OpenJiuwenKnowledgeAgent:
 
         prompt = self._build_task_prompt(task, domain, context, mode)
         started_at = time.perf_counter()
-        raw_output = await self._invoke_agent(agent, prompt)
+        conversation_id = f"{agent.card.id}_{run_context.trace_id}"
+        raw_output = await self._invoke_agent(agent, prompt, conversation_id=conversation_id)
         if mode == "enhanced" and run_context.unresolved_faults():
             run_context.apply_structured_recovery()
         latency_ms = int((time.perf_counter() - started_at) * 1000)
@@ -223,15 +224,15 @@ class OpenJiuwenKnowledgeAgent:
         Runner.resource_mgr.add_tool(tool=tools, tag=agent.card.id, refresh=True)
         agent.ability_manager.add([tool.card for tool in tools])
 
-    async def _invoke_agent(self, agent: ReActAgent, prompt: str) -> Any:
+    async def _invoke_agent(self, agent: ReActAgent, prompt: str, conversation_id: str) -> Any:
         try:
-            return await agent.invoke({"query": prompt, "conversation_id": f"{agent.card.id}_conv"})
+            return await agent.invoke({"query": prompt, "conversation_id": conversation_id})
         except Exception:
             # Current openJiuwen docs note that ReActAgent should use invoke()
             # directly, but keep Runner fallback for compatible versions.
             return await Runner.run_agent(
                 agent=agent,
-                inputs={"query": prompt, "conversation_id": f"{agent.card.id}_conv"},
+                inputs={"query": prompt, "conversation_id": conversation_id},
             )
 
     def _build_task_prompt(
