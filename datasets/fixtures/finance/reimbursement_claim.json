@@ -1,0 +1,9 @@
+{
+  "claim_id": "R-2026-081",
+  "employee": "demo_user",
+  "items": [
+    {"receipt_id": "A100", "amount": 240.0, "category": "travel"},
+    {"receipt_id": "A100", "amount": 240.0, "category": "travel"}
+  ],
+  "evidence": []
+}

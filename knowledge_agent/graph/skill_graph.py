@@ -107,7 +107,14 @@ class SkillGraph:
     def _score(self, skill: SkillSpec, query: set[str], domain: str) -> float:
         skill_tokens = self._tokens(
             " ".join(
-                [skill.name, skill.description, " ".join(skill.triggers), " ".join(skill.steps)]
+                [
+                    skill.name,
+                    skill.description,
+                    " ".join(skill.triggers),
+                    " ".join(skill.steps),
+                    " ".join(skill.failure_patterns),
+                    " ".join(skill.rollback),
+                ]
             )
         )
         overlap = len(query & skill_tokens)
@@ -116,7 +123,10 @@ class SkillGraph:
             score += 3.0
         for pattern in skill.failure_patterns:
             if self._tokens(pattern) & query:
-                score += 1.5
+                score += 3.0
+        for rollback in skill.rollback:
+            if self._tokens(rollback) & query:
+                score += 1.0
         return score
 
     def _tokens(self, text: str) -> set[str]:

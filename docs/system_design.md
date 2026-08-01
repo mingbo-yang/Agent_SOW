@@ -28,6 +28,12 @@ Baseline 使用经典 ReAct 设置：openJiuwen `ReActAgent` + DeepSeek API + �
 
 Enhanced 使用同一个 ReActAgent 框架和同一批任务，但额外调用知识工具，形成可对比的知识增强实验。
 
+另外提供 `rag` 与 `memory` 两个更强对照组：二者仍走真实 API，但只提供静态参考文档或原始历史轨迹摘要，不提供结构化技能图谱、失败模式匹配和 rollback plan。
+
+## Hard Benchmark
+
+`datasets/challenge_tasks.jsonl` 提供三类 hard case，任务包含 `fault_profile`、`expected_recovery_steps`、`required_before_report` 和约束信息。工具层会根据 `fault_profile` 返回结构化错误，Enhanced Agent 可通过 `retrieve_skills`、failure pattern 和 recovery tools 完成恢复。
+
 ## 评测指标
 
 - 任务成功率
@@ -35,4 +41,8 @@ Enhanced 使用同一个 ReActAgent 框架和同一批任务，但额外调用�
 - 平均交互轮数
 - 平均工具调用次数
 - 异常恢复率
+- 故障检测率
+- rollback 使用率
+- required-before-report 顺序满足率
+- 平均延迟
 - token usage 估算

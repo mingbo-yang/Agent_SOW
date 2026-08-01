@@ -1,0 +1,7 @@
+{
+  "papers": [
+    {"id": "pmid-crispr-001", "organism": "human cell line", "variables": {"temperature_c": 37, "replicates": 3}},
+    {"id": "pmid-catalyst-002", "variables": {"temperature_c": 85, "solvent": "ethanol"}},
+    {"id": "pmid-catalyst-003", "variables": {"temperature_c": 95, "solvent": "water"}}
+  ]
+}

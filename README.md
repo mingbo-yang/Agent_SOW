@@ -14,6 +14,7 @@ DEEPSEEK_API_KEY=... .venv/bin/python scripts/test_deepseek_api.py
 DEEPSEEK_API_KEY=... bash scripts/test_openjiuwen_deepseek.sh
 DEEPSEEK_API_KEY=... bash scripts/run_openjiuwen_demo.sh
 DEEPSEEK_API_KEY=... bash scripts/run_openjiuwen_eval.sh
+DEEPSEEK_API_KEY=... bash scripts/run_openjiuwen_eval.sh --agent all --dataset datasets/challenge_tasks.jsonl --limit 9
 python3 tests/run_tests.py
 ```
 
@@ -23,6 +24,8 @@ openJiuwen 评测产物位于 `outputs/`：
 
 - `openjiuwen_eval_results.json`
 - `openjiuwen_eval_results_baseline.json`
+- `openjiuwen_eval_results_rag.json`
+- `openjiuwen_eval_results_memory.json`
 - `openjiuwen_eval_results_enhanced.json`
 - `openjiuwen_eval_report.md`
 - `openjiuwen_skill_graph.json`
@@ -37,6 +40,7 @@ openJiuwen 评测产物位于 `outputs/`：
 - `knowledge_agent/feedback`：基于执行结果的技能置信度更新。
 - `knowledge_agent/evaluation`：openJiuwen baseline/enhanced 评测和指标。
 - `datasets`：三类模拟场景任务和 seed traces。
+- `datasets/challenge_tasks.jsonl`：带故障注入、恢复步骤和约束的 hard benchmark。
 - `demos`：openJiuwen ReAct 全流程演示。
 
 ## Baseline
@@ -44,3 +48,5 @@ openJiuwen 评测产物位于 `outputs/`：
 Baseline 采用经典 ReAct 无记忆/无技能检索设置：同样使用 openJiuwen `ReActAgent` 和真实 DeepSeek API，但只注册当前领域的业务工具。
 
 Enhanced 在相同任务、相同模型下额外注册 `retrieve_skills`、`record_trace_step`、`update_skill_feedback`、`export_skill_graph`，并将检索到的技能步骤注入 ReAct 工具选择过程。
+
+额外支持两个 API baseline：`rag` 只检索静态参考文档，`memory` 只检索原始历史轨迹摘要。二者都不返回结构化 Skill Graph、failure pattern 或 rollback plan。

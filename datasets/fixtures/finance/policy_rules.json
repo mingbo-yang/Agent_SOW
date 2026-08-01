@@ -1,0 +1,6 @@
+{
+  "policy_version": "2026.08",
+  "travel_daily_limit": 300.0,
+  "requires_duplicate_review": true,
+  "requires_evidence_for_amount_over": 100.0
+}

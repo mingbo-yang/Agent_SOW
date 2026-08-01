@@ -1,0 +1,5 @@
+{
+  "metadata_required": ["organism", "assay_type", "replicates", "readout"],
+  "budget_usd": 12000,
+  "biosafety": {"approval_required": true, "max_level": "BSL-2"}
+}

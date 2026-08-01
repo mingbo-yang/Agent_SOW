@@ -1,0 +1,6 @@
+{
+  "service": "checkout",
+  "primary_runbook": "restart service",
+  "rollback_runbook": "rollback deployment sha abc123",
+  "alternative_runbook": "shift traffic to healthy region"
+}

@@ -1,0 +1,6 @@
+{
+  "alarm_id": "ops-8842",
+  "service": "checkout",
+  "symptom": "p95 latency high",
+  "logs": [{"level": "error", "message": "timeout after deploy sha abc123"}]
+}

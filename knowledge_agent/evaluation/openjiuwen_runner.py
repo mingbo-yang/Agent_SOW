@@ -13,6 +13,13 @@ from knowledge_agent.openjiuwen_agent.agent import OpenJiuwenKnowledgeAgent
 
 
 class OpenJiuwenEvaluationRunner:
+    AGENT_TYPES = {
+        "openjiuwen-react-baseline": "baseline",
+        "openjiuwen-react-rag": "rag",
+        "openjiuwen-react-memory": "memory",
+        "openjiuwen-react-enhanced": "enhanced",
+    }
+
     def __init__(
         self,
         dataset_path: str | Path = "datasets/tasks.jsonl",
@@ -27,9 +34,9 @@ class OpenJiuwenEvaluationRunner:
         self.max_iterations = max_iterations
 
     def run(self, agent_type: str) -> dict[str, Any]:
-        if agent_type not in {"openjiuwen-react-baseline", "openjiuwen-react-enhanced"}:
-            raise ValueError("agent_type must be openjiuwen-react-baseline or openjiuwen-react-enhanced")
-        enhanced = agent_type.endswith("enhanced")
+        if agent_type not in self.AGENT_TYPES:
+            raise ValueError(f"agent_type must be one of {sorted(self.AGENT_TYPES)}")
+        mode = self.AGENT_TYPES[agent_type]
         tasks = self._load_tasks()
         agent = OpenJiuwenKnowledgeAgent.from_env(
             skill_store_path=self.output_dir / "openjiuwen_runtime_skills.json",
@@ -38,7 +45,7 @@ class OpenJiuwenEvaluationRunner:
         )
         results: list[AgentRunResult] = []
         for item in tasks:
-            result = self._run_with_retry(agent, item, enhanced)
+            result = self._run_with_retry(agent, item, mode)
             results.append(result)
         result_dicts = [self._result_to_dict(result) for result in results]
         metrics = aggregate_results(results)
@@ -54,7 +61,7 @@ class OpenJiuwenEvaluationRunner:
             "metrics": metrics,
             "results": result_dicts,
         }
-        suffix = "enhanced" if enhanced else "baseline"
+        suffix = mode
         (self.output_dir / f"openjiuwen_eval_results_{suffix}.json").write_text(
             json.dumps(payload, indent=2, ensure_ascii=False),
             encoding="utf-8",
@@ -83,15 +90,40 @@ class OpenJiuwenEvaluationRunner:
         self._write_report(comparison)
         return comparison
 
+    def run_all(self) -> dict[str, Any]:
+        reports = {mode: self.run(agent_type) for agent_type, mode in self.AGENT_TYPES.items()}
+        comparison = {
+            "baseline": reports["baseline"]["metrics"],
+            "rag": reports["rag"]["metrics"],
+            "memory": reports["memory"]["metrics"],
+            "enhanced": reports["enhanced"]["metrics"],
+            "delta": compare_reports(reports["baseline"]["metrics"], reports["enhanced"]["metrics"]),
+            "baseline_results": reports["baseline"]["results"],
+            "rag_results": reports["rag"]["results"],
+            "memory_results": reports["memory"]["results"],
+            "enhanced_results": reports["enhanced"]["results"],
+        }
+        comparison["delta"]["estimated_token_usage_delta"] = round(
+            reports["enhanced"]["metrics"]["avg_estimated_token_usage"]
+            - reports["baseline"]["metrics"]["avg_estimated_token_usage"],
+            3,
+        )
+        (self.output_dir / "openjiuwen_eval_results.json").write_text(
+            json.dumps(comparison, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        self._write_report(comparison)
+        return comparison
+
     def _run_with_retry(
         self,
         agent: OpenJiuwenKnowledgeAgent,
         item: dict[str, Any],
-        enhanced: bool,
+        mode: str,
     ) -> AgentRunResult:
         last: AgentRunResult | None = None
         for attempt in range(2):
-            result = agent.run(item["task"], item["domain"], item, enhanced=enhanced)
+            result = agent.run(item["task"], item["domain"], item, agent_type=mode)
             result.trace.metadata.audit["retry_attempt"] = attempt
             last = result
             if result.success or attempt == 1:
@@ -130,6 +162,8 @@ class OpenJiuwenEvaluationRunner:
 
     def _result_to_dict(self, result: AgentRunResult) -> dict[str, Any]:
         return {
+            "agent": result.agent_type,
+            "task_id": result.task_id,
             "task": result.task,
             "domain": result.domain,
             "success": result.success,
@@ -141,6 +175,12 @@ class OpenJiuwenEvaluationRunner:
             "key_step_f1": result.key_step_f1,
             "recovered": result.recovered,
             "failure_reason": result.failure_reason,
+            "failure_detected": result.failure_detected,
+            "matched_failure_patterns": result.matched_failure_patterns,
+            "rollback_used": result.rollback_used,
+            "recovery_success": result.recovery_success,
+            "required_order_ok": result.required_order_ok,
+            "latency_ms": result.latency_ms,
             "trace_id": result.trace.trace_id if result.trace else None,
             "trace_path": self._trace_path(result),
             "token_usage": self._estimate_token_usage(result),
@@ -149,8 +189,7 @@ class OpenJiuwenEvaluationRunner:
     def _trace_path(self, result: AgentRunResult) -> str | None:
         if not result.trace:
             return None
-        mode = "enhanced" if result.selected_skills else "baseline"
-        return str(self.output_dir / "openjiuwen_traces" / mode / f"{result.trace.trace_id}.json")
+        return str(self.output_dir / "openjiuwen_traces" / result.agent_type / f"{result.trace.trace_id}.json")
 
     def _estimate_token_usage(self, result: AgentRunResult) -> dict[str, int | str]:
         result_text = result.trace.result.result if result.trace and result.trace.result else ""
@@ -178,6 +217,10 @@ class OpenJiuwenEvaluationRunner:
             ("avg_interactions", "interaction_delta", "Avg interactions"),
             ("avg_tool_calls", "tool_call_delta", "Avg tool calls"),
             ("recovery_rate", "recovery_rate_delta", "Recovery rate"),
+            ("failure_detection_rate", "failure_detection_rate_delta", "Failure detection"),
+            ("rollback_used_rate", "rollback_used_rate_delta", "Rollback used"),
+            ("required_order_rate", "required_order_rate_delta", "Required order"),
+            ("avg_latency_ms", "latency_delta", "Avg latency ms"),
             ("avg_estimated_token_usage", "estimated_token_usage_delta", "Estimated token usage"),
         ]
         for metric_key, delta_key, label in rows:
@@ -200,7 +243,7 @@ class OpenJiuwenEvaluationRunner:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run openJiuwen ReAct evaluation.")
-    parser.add_argument("--agent", choices=["baseline", "enhanced", "both"], default="both")
+    parser.add_argument("--agent", choices=["baseline", "rag", "memory", "enhanced", "both", "all"], default="both")
     parser.add_argument("--dataset", default="datasets/tasks.jsonl")
     parser.add_argument("--output-dir", default="outputs")
     parser.add_argument("--limit", type=int, default=int(os.getenv("OPENJIUWEN_EVAL_LIMIT", "3")))
@@ -213,10 +256,16 @@ def main() -> None:
         limit=args.limit,
         max_iterations=args.max_iterations,
     )
-    if args.agent == "both":
+    if args.agent == "all":
+        result = runner.run_all()
+    elif args.agent == "both":
         result = runner.run_comparison()
     elif args.agent == "baseline":
         result = runner.run("openjiuwen-react-baseline")
+    elif args.agent == "rag":
+        result = runner.run("openjiuwen-react-rag")
+    elif args.agent == "memory":
+        result = runner.run("openjiuwen-react-memory")
     else:
         result = runner.run("openjiuwen-react-enhanced")
     print(json.dumps(result, indent=2, ensure_ascii=False))

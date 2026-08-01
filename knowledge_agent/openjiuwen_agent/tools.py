@@ -7,13 +7,14 @@ from typing import Any, AsyncIterator
 
 from knowledge_agent.evaluation.result import key_step_f1_score
 from knowledge_agent.graph.skill_graph import SkillGraph
+from knowledge_agent.openjiuwen_agent.planner import SkillPlan, compile_skill_plan
 from knowledge_agent.skills.schema import SkillSpec
 from knowledge_agent.skills.store import SkillStore
 from knowledge_agent.tracing.recorder import TraceRecorder
 
 try:
     from openjiuwen.core.foundation.tool import Tool, ToolCard
-except Exception:  # pragma: no cover - exercised only without openJiuwen installed
+except Exception:  # pragma: no cover
     Tool = object  # type: ignore
     ToolCard = None  # type: ignore
 
@@ -38,6 +39,14 @@ STEP_TO_TOOL = {
     "write_incident": "report_writer",
 }
 
+RECOVERY_STEPS = {
+    "recover_context",
+    "select_alternative_path",
+    "execute_rollback",
+    "manual_escalation",
+}
+
+
 @dataclass
 class OpenJiuwenRunContext:
     task: str
@@ -46,9 +55,19 @@ class OpenJiuwenRunContext:
     skill_store: SkillStore
     skill_graph: SkillGraph
     expected_steps: list[str] = field(default_factory=list)
+    expected_recovery_steps: list[str] = field(default_factory=list)
+    required_before_report: list[str] = field(default_factory=list)
+    raw_context: dict[str, Any] = field(default_factory=dict)
+    agent_type: str = "enhanced"
     selected_skill_ids: list[str] = field(default_factory=list)
     executed_steps: list[str] = field(default_factory=list)
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
+    resolved_faults: set[str] = field(default_factory=set)
+    detected_faults: set[str] = field(default_factory=set)
+    matched_failure_patterns: list[str] = field(default_factory=list)
+    skill_plan: SkillPlan = field(default_factory=SkillPlan)
+    rollback_used: bool = False
+    recovery_success: bool = False
     trace_id: str | None = None
 
     def start(self) -> str:
@@ -60,17 +79,18 @@ class OpenJiuwenRunContext:
         tool_name: str,
         action: str,
         args: dict[str, Any],
-        observation: str,
+        observation: str | dict[str, Any],
         error: str | None = None,
     ) -> None:
-        if action in STEP_TO_TOOL:
+        if action in STEP_TO_TOOL or action in RECOVERY_STEPS:
             self.executed_steps.append(action)
+        observation_text = observation if isinstance(observation, str) else json.dumps(observation, ensure_ascii=False)
         self.tool_calls.append(
             {
                 "tool_name": tool_name,
                 "action": action,
                 "args": args,
-                "observation": observation,
+                "observation": observation_text,
                 "error": error,
             }
         )
@@ -80,10 +100,68 @@ class OpenJiuwenRunContext:
             action=action,
             tool_name=tool_name,
             tool_args=args,
-            observation=observation,
+            observation=observation_text,
             error=error,
             reward=1.0 if error is None else -1.0,
         )
+
+    def fault_for(self, tool_name: str, action: str) -> dict[str, Any] | None:
+        for index, fault in enumerate(self._faults()):
+            fault_id = self._fault_id(index, fault)
+            if fault_id in self.resolved_faults:
+                continue
+            if fault.get("step") == action or fault.get("tool") == tool_name:
+                return {"fault_id": fault_id, **fault}
+        return None
+
+    def unresolved_faults(self) -> list[dict[str, Any]]:
+        pending = []
+        for index, fault in enumerate(self._faults()):
+            fault_id = self._fault_id(index, fault)
+            if fault_id not in self.resolved_faults:
+                pending.append({"fault_id": fault_id, **fault})
+        return pending
+
+    def resolve_faults_with(self, recovery_tool: str, recovery_action: str) -> list[str]:
+        resolved = []
+        for index, fault in enumerate(self._faults()):
+            fault_id = self._fault_id(index, fault)
+            if fault_id in self.resolved_faults:
+                continue
+            recoverable_by = set(fault.get("recoverable_by") or [])
+            if recovery_tool in recoverable_by or recovery_action in recoverable_by:
+                self.resolved_faults.add(fault_id)
+                resolved.append(fault_id)
+        if resolved:
+            self.recovery_success = True
+        return resolved
+
+    def apply_structured_recovery(self) -> None:
+        for fault in self.unresolved_faults():
+            recovery_action = _recovery_action_for_error(str(fault.get("error_code", "")))
+            recovery_tool = RECOVERY_TOOL_BY_ACTION.get(recovery_action, "manual_escalation")
+            observation = {
+                "ok": True,
+                "step": recovery_action,
+                "tool": recovery_tool,
+                "content": f"structured recovery resolved {fault.get('error_code')}",
+                "resolved_fault_id": fault["fault_id"],
+            }
+            self.resolved_faults.add(fault["fault_id"])
+            if recovery_action == "execute_rollback":
+                self.rollback_used = True
+            self.recovery_success = True
+            self.record_tool(recovery_tool, recovery_action, {"auto": True, "fault": fault}, observation)
+
+    def _faults(self) -> list[dict[str, Any]]:
+        profile = self.raw_context.get("fault_profile") or {}
+        failures = profile.get("failures") or []
+        if not failures and profile.get("error_code"):
+            failures = [profile]
+        return [dict(item) for item in failures]
+
+    def _fault_id(self, index: int, fault: dict[str, Any]) -> str:
+        return str(fault.get("fault_id") or f"{fault.get('step') or fault.get('tool')}:{fault.get('error_code')}:{index}")
 
 
 def make_tool_card(name: str, description: str, properties: dict[str, Any] | None = None):
@@ -119,7 +197,7 @@ class RetrieveSkillsTool(KnowledgeTool):
     def __init__(self, context: OpenJiuwenRunContext):
         super().__init__(
             "retrieve_skills",
-            "Retrieve reusable skills from the Skill Graph before planning or tool execution.",
+            "Retrieve reusable skills and compile a Skill Graph plan before execution.",
             context,
             {
                 "task": {"type": "string", "description": "Current user task."},
@@ -133,18 +211,16 @@ class RetrieveSkillsTool(KnowledgeTool):
         task = str(inputs.get("task") or self.context.task)
         domain = str(inputs.get("domain") or self.context.domain)
         top_k = int(inputs.get("top_k") or 3)
-        skills = self.context.skill_graph.retrieve(task, domain, inputs.get("context"), top_k=top_k)
+        skills = self.context.skill_graph.retrieve(task, domain, self.context.raw_context, top_k=top_k)
         self.context.selected_skill_ids = [skill.skill_id for skill in skills]
+        self.context.skill_plan = compile_skill_plan(skills, self.context.raw_context)
+        self.context.matched_failure_patterns = list(self.context.skill_plan.matched_failure_patterns)
         payload = {
             "skills": [skill_summary(skill) for skill in skills],
-            "recommended_steps": merge_steps(skills),
+            "recommended_steps": self.context.skill_plan.ordered_steps,
+            "skill_plan": self.context.skill_plan.to_dict(),
         }
-        self.context.record_tool(
-            self.card.name,
-            "retrieve_skills",
-            inputs,
-            json.dumps(payload, ensure_ascii=False),
-        )
+        self.context.record_tool(self.card.name, "retrieve_skills", inputs, payload)
         return {"content": json.dumps(payload, ensure_ascii=False)}
 
 
@@ -216,6 +292,64 @@ class ExportSkillGraphTool(KnowledgeTool):
         return {"content": str(path)}
 
 
+class ReferenceDocsTool(KnowledgeTool):
+    def __init__(self, context: OpenJiuwenRunContext):
+        super().__init__(
+            "retrieve_reference_docs",
+            "Retrieve static reference documents for a ReAct+RAG baseline. It does not return skills or rollback plans.",
+            context,
+        )
+
+    async def invoke(self, inputs: dict[str, Any], **kwargs) -> dict[str, Any]:
+        payload = {
+            "domain": self.context.domain,
+            "docs": [
+                f"Static {self.context.domain} operating procedure.",
+                "Follow task constraints and inspect tool observations before final decision.",
+            ],
+        }
+        self.context.record_tool(self.card.name, "retrieve_reference_docs", inputs, payload)
+        return {"content": json.dumps(payload, ensure_ascii=False)}
+
+
+class RawMemoryTool(KnowledgeTool):
+    def __init__(self, context: OpenJiuwenRunContext):
+        super().__init__(
+            "retrieve_raw_memory",
+            "Retrieve raw historical trace snippets for a memory baseline. It does not return structured Skill Graph plans.",
+            context,
+        )
+
+    async def invoke(self, inputs: dict[str, Any], **kwargs) -> dict[str, Any]:
+        snippets = []
+        for skill in self.context.skill_store.list():
+            if skill.domain == self.context.domain:
+                snippets.append({"trace_ids": skill.evidence_trace_ids, "summary": skill.description})
+        payload = {"domain": self.context.domain, "memory": snippets[:3]}
+        self.context.record_tool(self.card.name, "retrieve_raw_memory", inputs, payload)
+        return {"content": json.dumps(payload, ensure_ascii=False)}
+
+
+class RecoveryTool(KnowledgeTool):
+    def __init__(self, name: str, description: str, action: str, context: OpenJiuwenRunContext):
+        super().__init__(name, description, context)
+        self.action = action
+
+    async def invoke(self, inputs: dict[str, Any], **kwargs) -> dict[str, Any]:
+        resolved = self.context.resolve_faults_with(self.card.name, self.action)
+        if self.action == "execute_rollback":
+            self.context.rollback_used = True
+        observation = {
+            "ok": True,
+            "step": self.action,
+            "tool": self.card.name,
+            "content": f"{self.card.name} resolved {len(resolved)} pending fault(s)",
+            "resolved_faults": resolved,
+        }
+        self.context.record_tool(self.card.name, self.action, inputs, observation)
+        return observation
+
+
 class DomainTool(KnowledgeTool):
     def __init__(self, tool_name: str, description: str, action: str, context: OpenJiuwenRunContext):
         super().__init__(tool_name, description, context)
@@ -223,26 +357,71 @@ class DomainTool(KnowledgeTool):
 
     async def invoke(self, inputs: dict[str, Any], **kwargs) -> dict[str, Any]:
         action = "write_incident" if self.card.name == "report_writer" and self.context.domain == "industrial" else self.action
-        observation = domain_observation(self.context.domain, self.card.name, inputs)
+        fault = self.context.fault_for(self.card.name, action)
+        if fault:
+            error_code = str(fault.get("error_code") or "TOOL_ERROR")
+            self.context.detected_faults.add(error_code)
+            suggested = _recovery_action_for_error(error_code)
+            observation = {
+                "ok": False,
+                "step": action,
+                "tool": self.card.name,
+                "content": fault.get("message") or f"{self.card.name} failed with {error_code}",
+                "error_code": error_code,
+                "needs_recovery": True,
+                "suggested_recovery": suggested,
+                "recoverable_by": fault.get("recoverable_by") or [RECOVERY_TOOL_BY_ACTION.get(suggested, "manual_escalation")],
+            }
+            self.context.record_tool(self.card.name, action, inputs, observation, error=error_code)
+            return observation
+
+        observation = {
+            "ok": True,
+            "step": action,
+            "tool": self.card.name,
+            "content": domain_observation(self.context.domain, self.card.name, inputs),
+            "error_code": None,
+            "needs_recovery": False,
+            "suggested_recovery": None,
+        }
         self.context.record_tool(self.card.name, action, inputs, observation)
-        return {"content": observation, "step": action, "tool": self.card.name}
+        return observation
+
+
+RECOVERY_TOOL_BY_ACTION = {
+    "recover_context": "context_requester",
+    "select_alternative_path": "alternative_tool_selector",
+    "execute_rollback": "rollback_executor",
+    "manual_escalation": "manual_escalation",
+}
 
 
 def build_openjiuwen_tools(
     context: OpenJiuwenRunContext,
-    enhanced: bool,
+    agent_type: str = "enhanced",
     graph_output_path: str | Path = "outputs/openjiuwen_skill_graph.json",
+    enhanced: bool | None = None,
 ) -> list[KnowledgeTool]:
+    if enhanced is not None:
+        agent_type = "enhanced" if enhanced else "baseline"
     tools: list[KnowledgeTool] = []
-    if enhanced:
+    if agent_type == "enhanced":
         tools.extend(
             [
                 RetrieveSkillsTool(context),
                 RecordTraceStepTool(context),
                 UpdateSkillFeedbackTool(context),
                 ExportSkillGraphTool(context, graph_output_path),
+                RecoveryTool("context_requester", "Recover by requesting or filling missing context.", "recover_context", context),
+                RecoveryTool("alternative_tool_selector", "Recover by selecting an alternative path or tool.", "select_alternative_path", context),
+                RecoveryTool("rollback_executor", "Recover by rolling back unsafe or failed changes.", "execute_rollback", context),
+                RecoveryTool("manual_escalation", "Recover by escalating policy or safety conflicts.", "manual_escalation", context),
             ]
         )
+    elif agent_type == "rag":
+        tools.append(ReferenceDocsTool(context))
+    elif agent_type == "memory":
+        tools.append(RawMemoryTool(context))
     tools.extend(build_domain_tools(context))
     return tools
 
@@ -291,15 +470,6 @@ def skill_summary(skill: SkillSpec) -> dict[str, Any]:
     }
 
 
-def merge_steps(skills: list[SkillSpec]) -> list[str]:
-    steps: list[str] = []
-    for skill in skills:
-        for step in skill.steps:
-            if step not in steps:
-                steps.append(step)
-    return steps
-
-
 def domain_observation(domain: str, tool_name: str, inputs: dict[str, Any]) -> str:
     query = str(inputs.get("query") or inputs.get("task") or "")
     context = str(inputs.get("context") or "")
@@ -309,10 +479,44 @@ def domain_observation(domain: str, tool_name: str, inputs: dict[str, Any]) -> s
     )
 
 
-def evaluate_openjiuwen_run(context: OpenJiuwenRunContext) -> tuple[bool, float, str | None]:
+def evaluate_openjiuwen_run(context: OpenJiuwenRunContext) -> tuple[bool, float, str | None, bool]:
     expected = list(context.expected_steps)
-    if not expected:
-        return True, 1.0, None
-    f1 = key_step_f1_score(context.executed_steps, expected)
+    business_steps = [step for step in context.executed_steps if step in expected]
+    f1 = key_step_f1_score(business_steps, expected) if expected else 1.0
     missing = [step for step in expected if step not in context.executed_steps]
-    return not missing, f1, f"missing_steps:{','.join(missing)}" if missing else None
+    missing_recovery = [step for step in context.expected_recovery_steps if step not in context.executed_steps]
+    order_ok = required_order_ok(context.executed_steps, context.required_before_report, expected)
+    unresolved = context.unresolved_faults()
+    reasons = []
+    if missing:
+        reasons.append(f"missing_steps:{','.join(missing)}")
+    if missing_recovery:
+        reasons.append(f"missing_recovery_steps:{','.join(missing_recovery)}")
+    if not order_ok:
+        reasons.append("required_order_violation")
+    if unresolved:
+        reasons.append("unresolved_faults:" + ",".join(str(item.get("error_code")) for item in unresolved))
+    return not reasons, f1, ";".join(reasons) if reasons else None, order_ok
+
+
+def required_order_ok(executed_steps: list[str], required_before_report: list[str], expected: list[str]) -> bool:
+    if not required_before_report:
+        return True
+    final_steps = [step for step in ["generate_report", "write_incident", "approve_or_reject"] if step in expected]
+    if not final_steps:
+        return True
+    positions = {step: index for index, step in enumerate(executed_steps)}
+    final_position = min((positions[step] for step in final_steps if step in positions), default=None)
+    if final_position is None:
+        return False
+    return all(step in positions and positions[step] < final_position for step in required_before_report)
+
+
+def _recovery_action_for_error(error_code: str) -> str:
+    if error_code in {"MISSING_METADATA", "VARIABLE_MISMATCH", "POLICY_EVIDENCE_REQUIRED", "DUPLICATE_RECEIPT_EVIDENCE", "POLICY_VERSION_CHANGED"}:
+        return "recover_context"
+    if error_code in {"LOG_TOOL_UNAVAILABLE", "RUNBOOK_NOT_APPLICABLE"}:
+        return "select_alternative_path"
+    if error_code in {"RECENT_DEPLOYMENT_REGRESSION", "HEALTH_CHECK_FAILED"}:
+        return "execute_rollback"
+    return "manual_escalation"

@@ -1,0 +1,6 @@
+{
+  "risk_flags": [
+    {"type": "duplicate_receipt", "receipt_id": "A100", "severity": "high"},
+    {"type": "missing_evidence", "severity": "medium"}
+  ]
+}

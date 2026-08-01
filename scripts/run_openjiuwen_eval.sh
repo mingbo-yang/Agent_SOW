@@ -21,5 +21,8 @@ export DEEPSEEK_API_BASE="${DEEPSEEK_API_BASE:-https://api.deepseek.com}"
 export MODEL_PROVIDER="${MODEL_PROVIDER:-openai}"
 export OPENJIUWEN_EVAL_LIMIT="${OPENJIUWEN_EVAL_LIMIT:-3}"
 
-"$PYTHON_BIN" -m knowledge_agent.evaluation.openjiuwen_runner --agent both --limit "$OPENJIUWEN_EVAL_LIMIT"
-
+if [ "$#" -gt 0 ]; then
+  "$PYTHON_BIN" -m knowledge_agent.evaluation.openjiuwen_runner "$@"
+else
+  "$PYTHON_BIN" -m knowledge_agent.evaluation.openjiuwen_runner --agent both --limit "$OPENJIUWEN_EVAL_LIMIT"
+fi
