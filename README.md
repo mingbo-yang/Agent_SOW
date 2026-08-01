@@ -13,6 +13,8 @@ bash scripts/run_demo.sh
 bash scripts/run_eval.sh
 python3 tests/run_tests.py
 bash scripts/check_openjiuwen.sh
+DEEPSEEK_API_KEY=... .venv/bin/python scripts/test_deepseek_api.py
+DEEPSEEK_API_KEY=... bash scripts/test_openjiuwen_deepseek.sh
 ```
 
 评测输出位于 `outputs/`：

@@ -6,6 +6,7 @@ __pycache__/
 .venv/
 venv/
 outputs/
+logs/
 datasets/datasets--*/
 datasets/*/.cache/
 *.egg-info/
