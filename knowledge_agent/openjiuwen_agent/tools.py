@@ -5,8 +5,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncIterator
 
+from knowledge_agent.evaluation.result import key_step_f1_score
 from knowledge_agent.graph.skill_graph import SkillGraph
-from knowledge_agent.planner.agent import key_step_f1_score
 from knowledge_agent.skills.schema import SkillSpec
 from knowledge_agent.skills.store import SkillStore
 from knowledge_agent.tracing.recorder import TraceRecorder

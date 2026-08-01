@@ -8,8 +8,8 @@ from statistics import mean
 from typing import Any
 
 from knowledge_agent.evaluation.metrics import aggregate_results, compare_reports
+from knowledge_agent.evaluation.result import AgentRunResult
 from knowledge_agent.openjiuwen_agent.agent import OpenJiuwenKnowledgeAgent
-from knowledge_agent.planner.agent import AgentRunResult
 
 
 class OpenJiuwenEvaluationRunner:

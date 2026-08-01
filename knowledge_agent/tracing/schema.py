@@ -56,8 +56,8 @@ class ExecutionResult:
 @dataclass
 class TraceMetadata:
     source: str = "zju_knowledge_agent"
-    agent: str = "standalone"
-    model: str = "rules"
+    agent: str = "openjiuwen_react"
+    model: str = "deepseek-v4-flash"
     timestamp: str = field(default_factory=utc_now_iso)
     audit: dict[str, Any] = field(default_factory=dict)
 
@@ -102,4 +102,3 @@ class Trace:
             result=ExecutionResult(**result) if result else None,
             metadata=TraceMetadata(**metadata),
         )
-

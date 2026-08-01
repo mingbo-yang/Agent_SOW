@@ -6,8 +6,8 @@ import os
 from pathlib import Path
 from typing import Any
 
+from knowledge_agent.evaluation.result import AgentRunResult
 from knowledge_agent.graph.skill_graph import SkillGraph
-from knowledge_agent.planner.agent import AgentRunResult
 from knowledge_agent.skills.extractor import SkillExtractor
 from knowledge_agent.skills.store import SkillStore
 from knowledge_agent.tracing.recorder import TraceRecorder, load_traces_jsonl

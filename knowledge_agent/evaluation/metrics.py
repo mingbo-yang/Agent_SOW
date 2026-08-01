@@ -3,7 +3,7 @@ from __future__ import annotations
 from statistics import mean
 from typing import Any
 
-from knowledge_agent.planner.agent import AgentRunResult
+from knowledge_agent.evaluation.result import AgentRunResult
 
 
 def aggregate_results(results: list[AgentRunResult]) -> dict[str, Any]:
@@ -36,4 +36,3 @@ def compare_reports(baseline: dict[str, Any], enhanced: dict[str, Any]) -> dict[
         "tool_call_delta": round(enhanced["avg_tool_calls"] - baseline["avg_tool_calls"], 3),
         "recovery_rate_delta": round(enhanced["recovery_rate"] - baseline["recovery_rate"], 3),
     }
-
