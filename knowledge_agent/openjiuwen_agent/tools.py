@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncIterator
 
+from knowledge_agent.benchmarks.agentbench_adapter import execute_sql_fixture, heuristic_sql_for_task
 from knowledge_agent.evaluation.result import key_step_f1_score
 from knowledge_agent.graph.skill_graph import SkillGraph
 from knowledge_agent.openjiuwen_agent.planner import SkillPlan, compile_skill_plan
@@ -37,6 +38,11 @@ STEP_TO_TOOL = {
     "select_recovery": "runbook_selector",
     "verify_recovery": "health_checker",
     "write_incident": "report_writer",
+    "read_schema": "db_schema_reader",
+    "generate_sql": "sql_query_executor",
+    "execute_sql": "sql_query_executor",
+    "validate_answer": "answer_submitter",
+    "submit_answer": "answer_submitter",
 }
 
 RECOVERY_STEPS = {
@@ -69,6 +75,9 @@ class OpenJiuwenRunContext:
     rollback_used: bool = False
     recovery_success: bool = False
     trace_id: str | None = None
+    db_last_sql: str | None = None
+    db_last_rows: list[dict[str, Any]] = field(default_factory=list)
+    db_last_answer: str | None = None
 
     def start(self) -> str:
         self.trace_id = self.trace_recorder.start(self.task, self.domain)
@@ -388,6 +397,189 @@ class DomainTool(KnowledgeTool):
         return observation
 
 
+class DBSchemaReaderTool(KnowledgeTool):
+    def __init__(self, context: OpenJiuwenRunContext):
+        super().__init__(
+            "db_schema_reader",
+            "Read the DBBench database schema before writing SQL.",
+            context,
+            {
+                "query": {"type": "string", "description": "Question to answer."},
+            },
+        )
+
+    async def invoke(self, inputs: dict[str, Any], **kwargs) -> dict[str, Any]:
+        fault = self.context.fault_for(self.card.name, "read_schema")
+        if fault:
+            return self._fault_observation(inputs, fault)
+        schema = self.context.raw_context.get("schema") or (
+            (self.context.raw_context.get("dbbench_fixture") or {}).get("schema")
+        )
+        observation = {
+            "ok": True,
+            "step": "read_schema",
+            "tool": self.card.name,
+            "content": schema or "schema unavailable; inspect official AgentBench DB environment",
+            "error_code": None,
+            "needs_recovery": False,
+            "suggested_recovery": None,
+        }
+        self.context.record_tool(self.card.name, "read_schema", inputs, observation)
+        return observation
+
+    def _fault_observation(self, inputs: dict[str, Any], fault: dict[str, Any]) -> dict[str, Any]:
+        error_code = str(fault.get("error_code") or "SCHEMA_READ_ERROR")
+        self.context.detected_faults.add(error_code)
+        suggested = _recovery_action_for_error(error_code)
+        observation = {
+            "ok": False,
+            "step": "read_schema",
+            "tool": self.card.name,
+            "content": fault.get("message") or error_code,
+            "error_code": error_code,
+            "needs_recovery": True,
+            "suggested_recovery": suggested,
+        }
+        self.context.record_tool(self.card.name, "read_schema", inputs, observation, error=error_code)
+        return observation
+
+
+class SQLQueryExecutorTool(KnowledgeTool):
+    def __init__(self, context: OpenJiuwenRunContext):
+        super().__init__(
+            "sql_query_executor",
+            "Execute SQL against the DBBench sqlite fixture or official DB context.",
+            context,
+            {
+                "sql": {"type": "string", "description": "SQL query to execute."},
+                "query": {"type": "string", "description": "Natural-language question if SQL is not ready."},
+            },
+        )
+
+    async def invoke(self, inputs: dict[str, Any], **kwargs) -> dict[str, Any]:
+        sql = str(inputs.get("sql") or "").strip()
+        if not sql:
+            sql = heuristic_sql_for_task(str(inputs.get("query") or self.context.task))
+        self.context.db_last_sql = sql
+        self.context.record_tool(
+            self.card.name,
+            "generate_sql",
+            {"sql": sql, "source": "model_or_heuristic", **inputs},
+            {"ok": True, "step": "generate_sql", "tool": self.card.name, "content": sql},
+        )
+        fault = self.context.fault_for(self.card.name, "execute_sql")
+        if fault:
+            error_code = str(fault.get("error_code") or "SQL_EXECUTION_ERROR")
+            self.context.detected_faults.add(error_code)
+            suggested = _recovery_action_for_error(error_code)
+            observation = {
+                "ok": False,
+                "step": "execute_sql",
+                "tool": self.card.name,
+                "content": fault.get("message") or f"SQL failed: {sql}",
+                "sql": sql,
+                "error_code": error_code,
+                "needs_recovery": True,
+                "suggested_recovery": suggested,
+                "recoverable_by": fault.get("recoverable_by") or [RECOVERY_TOOL_BY_ACTION.get(suggested, "manual_escalation")],
+            }
+            self.context.record_tool(self.card.name, "execute_sql", inputs, observation, error=error_code)
+            return observation
+
+        fixture = self.context.raw_context.get("dbbench_fixture") or {}
+        if fixture.get("tables"):
+            ok, content, rows = execute_sql_fixture(fixture, sql)
+            self.context.db_last_rows = rows
+            if rows:
+                first_row = rows[0]
+                if len(first_row) == 1:
+                    self.context.db_last_answer = str(next(iter(first_row.values())))
+                else:
+                    self.context.db_last_answer = json.dumps(first_row, ensure_ascii=False)
+            error_code = None if ok else "SQL_EXECUTION_ERROR"
+            observation = {
+                "ok": ok,
+                "step": "execute_sql",
+                "tool": self.card.name,
+                "content": content,
+                "sql": sql,
+                "error_code": error_code,
+                "needs_recovery": not ok,
+                "suggested_recovery": _recovery_action_for_error(error_code or "") if not ok else None,
+            }
+            self.context.record_tool(self.card.name, "execute_sql", inputs, observation, error=error_code)
+            return observation
+
+        observation = {
+            "ok": True,
+            "step": "execute_sql",
+            "tool": self.card.name,
+            "content": "SQL prepared for official AgentBench DB environment; local DB handle unavailable.",
+            "sql": sql,
+            "error_code": None,
+            "needs_recovery": False,
+            "suggested_recovery": None,
+        }
+        self.context.record_tool(self.card.name, "execute_sql", inputs, observation)
+        return observation
+
+
+class AnswerSubmitterTool(KnowledgeTool):
+    def __init__(self, context: OpenJiuwenRunContext):
+        super().__init__(
+            "answer_submitter",
+            "Validate and submit the final DBBench answer.",
+            context,
+            {
+                "answer": {"type": "string", "description": "Final answer."},
+            },
+        )
+
+    async def invoke(self, inputs: dict[str, Any], **kwargs) -> dict[str, Any]:
+        answer = str(inputs.get("answer") or self.context.db_last_answer or "").strip()
+        expected = self.context.raw_context.get("_private_expected_answer") or self.context.raw_context.get("expected_answer")
+        if isinstance(expected, list):
+            expected_values = [str(item).strip().lower() for item in expected]
+        elif expected is None:
+            expected_values = []
+        else:
+            expected_values = [str(expected).strip().lower()]
+        validated = not expected_values or any(value in answer.lower() for value in expected_values)
+        validation = {
+            "ok": validated,
+            "step": "validate_answer",
+            "tool": self.card.name,
+            "content": {"answer": answer, "expected_available": expected is not None},
+            "error_code": None if validated else "ANSWER_MISMATCH",
+            "needs_recovery": not validated,
+            "suggested_recovery": "select_alternative_path" if not validated else None,
+        }
+        self.context.record_tool(
+            self.card.name,
+            "validate_answer",
+            inputs,
+            validation,
+            error=None if validated else "ANSWER_MISMATCH",
+        )
+        submission = {
+            "ok": validated,
+            "step": "submit_answer",
+            "tool": self.card.name,
+            "content": answer,
+            "error_code": None if validated else "ANSWER_MISMATCH",
+            "needs_recovery": False,
+            "suggested_recovery": None,
+        }
+        self.context.record_tool(
+            self.card.name,
+            "submit_answer",
+            inputs,
+            submission,
+            error=None if validated else "ANSWER_MISMATCH",
+        )
+        return submission
+
+
 RECOVERY_TOOL_BY_ACTION = {
     "recover_context": "context_requester",
     "select_alternative_path": "alternative_tool_selector",
@@ -426,7 +618,9 @@ def build_openjiuwen_tools(
     return tools
 
 
-def build_domain_tools(context: OpenJiuwenRunContext) -> list[DomainTool]:
+def build_domain_tools(context: OpenJiuwenRunContext) -> list[KnowledgeTool]:
+    if context.domain == "agentbench_db":
+        return [DBSchemaReaderTool(context), SQLQueryExecutorTool(context), AnswerSubmitterTool(context)]
     common: dict[str, list[tuple[str, str, str]]] = {
         "ai4science": [
             ("literature_search", "Search AI4Science literature evidence.", "collect_literature"),
@@ -502,7 +696,7 @@ def evaluate_openjiuwen_run(context: OpenJiuwenRunContext) -> tuple[bool, float,
 def required_order_ok(executed_steps: list[str], required_before_report: list[str], expected: list[str]) -> bool:
     if not required_before_report:
         return True
-    final_steps = [step for step in ["generate_report", "write_incident", "approve_or_reject"] if step in expected]
+    final_steps = [step for step in ["generate_report", "write_incident", "approve_or_reject", "submit_answer"] if step in expected]
     if not final_steps:
         return True
     positions = {step: index for index, step in enumerate(executed_steps)}
@@ -519,4 +713,6 @@ def _recovery_action_for_error(error_code: str) -> str:
         return "select_alternative_path"
     if error_code in {"RECENT_DEPLOYMENT_REGRESSION", "HEALTH_CHECK_FAILED"}:
         return "execute_rollback"
+    if error_code in {"SQL_EXECUTION_ERROR", "SQL_SYNTAX_ERROR", "ANSWER_MISMATCH", "SCHEMA_READ_ERROR"}:
+        return "select_alternative_path"
     return "manual_escalation"

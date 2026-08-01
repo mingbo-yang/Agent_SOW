@@ -15,6 +15,13 @@ from tests.test_openjiuwen_core import (
     test_openjiuwen_runner_selects_domain_balanced_tasks,
     test_retrieve_skills_returns_skill_plan,
 )
+from tests.test_agentbench import (
+    test_agentbench_adapter_fallback_task_shape,
+    test_agentbench_db_tool_sets,
+    test_agentbench_db_tools_record_expected_steps,
+    test_agentbench_runner_generates_mock_result_json,
+    test_agentbench_sql_fixture_execution,
+)
 from tests.test_skills_graph import test_skill_extraction_store_and_graph
 from tests.test_tracing import test_trace_recorder_jsonl_roundtrip
 
@@ -29,6 +36,11 @@ def main() -> None:
         test_fault_profile_and_recovery_tool,
         test_retrieve_skills_returns_skill_plan,
         test_key_step_f1_score,
+        test_agentbench_adapter_fallback_task_shape,
+        test_agentbench_db_tool_sets,
+        test_agentbench_sql_fixture_execution,
+        test_agentbench_db_tools_record_expected_steps,
+        test_agentbench_runner_generates_mock_result_json,
     ]
     for test in tests:
         with tempfile.TemporaryDirectory() as tmp:

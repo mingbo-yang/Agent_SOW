@@ -246,11 +246,12 @@ class OpenJiuwenKnowledgeAgent:
         expected_text = ", ".join(expected)
         recovery_text = ", ".join(expected_recovery)
         skill_instruction = self._mode_instruction(agent_type)
+        prompt_context = _redact_context_for_prompt(context)
         return (
             f"Mode: {agent_type}\n"
             f"Domain: {domain}\n"
             f"Task: {task}\n"
-            f"Context JSON: {json.dumps(context, ensure_ascii=False)}\n"
+            f"Context JSON: {json.dumps(prompt_context, ensure_ascii=False)}\n"
             f"Expected key steps for evaluation: {expected_text}\n"
             f"Expected recovery steps when faults occur: {recovery_text}\n"
             f"{skill_instruction}\n"
@@ -306,3 +307,18 @@ class OpenJiuwenKnowledgeAgent:
     def _require_openjiuwen(self) -> None:
         if ReActAgent is None:
             raise RuntimeError("openjiuwen is not installed. Use .venv or install openjiuwen first.")
+
+
+def _redact_context_for_prompt(value: Any) -> Any:
+    if isinstance(value, dict):
+        redacted = {}
+        for key, item in value.items():
+            if str(key).startswith("_private"):
+                continue
+            if key in {"label", "answer", "expected_answer", "gold", "sql", "dbbench_fixture", "rows", "tables"}:
+                continue
+            redacted[key] = _redact_context_for_prompt(item)
+        return redacted
+    if isinstance(value, list):
+        return [_redact_context_for_prompt(item) for item in value]
+    return value

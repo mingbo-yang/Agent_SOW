@@ -7,6 +7,10 @@ __pycache__/
 venv/
 outputs/
 logs/
+external/AgentBench/
+external/AgentBench*/
+outputs/agentbench/
+agentbench.log
 datasets/datasets--*/
 datasets/*/.cache/
 *.egg-info/
