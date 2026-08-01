@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "zju-knowledge-agent"
+version = "0.1.0"
+description = "Knowledge-enhanced Agent MVP for trajectory-to-skill evolution."
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+openjiuwen = ["openjiuwen>=0.1.16"]
+dev = ["pytest>=8.0"]
+
+[tool.setuptools.packages.find]
+include = ["knowledge_agent*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-q"
